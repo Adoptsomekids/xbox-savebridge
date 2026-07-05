@@ -121,7 +121,7 @@ jobs:
           $csproj = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\SaveBridge.csproj"
           $content = Get-Content $csproj -Raw
 
-          # Build the injection block — an ItemGroup with ReferencePath items for all BCL dlls
+          # Build the injection block: an ItemGroup with ReferencePath items for all BCL dlls
           $refDir = "$pkgDir\ref\uap10.0.15138"
           $dlls = Get-ChildItem $refDir -Filter "*.dll" | ForEach-Object { $_.FullName }
           $items = ($dlls | ForEach-Object { "    <ReferencePath Include=`"$_`" />" }) -join "`n"
