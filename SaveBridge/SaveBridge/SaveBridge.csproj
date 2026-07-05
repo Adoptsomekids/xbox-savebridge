@@ -28,6 +28,9 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <!-- C# 8 required for 'using var' syntax -->
     <LangVersion>8.0</LangVersion>
+    <!-- Required by Microsoft.NETCore.UniversalWindowsPlatform NuGet targets -->
+    <RuntimeIdentifier>win10-arm64</RuntimeIdentifier>
+    <RuntimeIdentifiers>win10-arm64</RuntimeIdentifiers>
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
   </PropertyGroup>
