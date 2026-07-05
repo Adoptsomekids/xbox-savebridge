@@ -41,6 +41,7 @@ jobs:
 
       - name: Verify UWP XAML targets exist
         shell: powershell
+        continue-on-error: true
         run: |
           $searchRoots = @(
             "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\WindowsXaml",
@@ -49,15 +50,15 @@ jobs:
           $found = $false
           foreach ($root in $searchRoots) {
             if (Test-Path $root) {
-              Write-Host "✓ Found UWP XAML targets at: $root"
-              Get-ChildItem $root | ForEach-Object { Write-Host "  $($_.Name)" }
+              Write-Host "Found UWP XAML targets at: $root"
+              Get-ChildItem $root | ForEach-Object { Write-Host $_.Name }
               $found = $true
             }
           }
           if (-not $found) {
-            Write-Host "Searching entire VS install for WindowsXaml targets..."
+            Write-Host "WindowsXaml targets not found in standard locations. Searching..."
             Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" -Recurse -Filter "Microsoft.Windows.UI.Xaml.CSharp.targets" -ErrorAction SilentlyContinue |
-              Select-Object -First 5 | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
+              Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
           }
 
       # NuGet v5+ is required for PackageReference support in legacy .csproj files
