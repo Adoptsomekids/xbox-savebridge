@@ -1,5 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
+/// v12: adds /browse?path=ABS and /di/list for Dead Island DE save access
 "use strict";
 
 var PORT     = 8765;
@@ -158,6 +159,16 @@ function dispatch(head, bodyBytes, remote, socket) {
         } else {
             handleWgsUpload(writer, rp, bodyBytes, done);
         }
+    } else if (path === "/browse" && method === "GET") {
+        var abspath = query["path"] || "";
+        if (!abspath) { sendJson(writer, 400, {error:"path required"}); done(); }
+        else { handleBrowse(writer, abspath, done); }
+    } else if (path === "/di/list" && method === "GET") {
+        handleDiList(writer, done);
+    } else if (path === "/di/download" && method === "GET") {
+        var rp = query["path"] || "";
+        if (!rp) { sendJson(writer, 400, {error:"path required"}); done(); }
+        else { handleDiDownload(writer, rp, done); }
     } else {
         sendJson(writer, 404, {error:"not found", path:path});
         done();
@@ -268,6 +279,146 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
             done();
         });
     });
+}
+
+// ── Browse / Dead Island helpers ─────────────────────────────────────────────
+
+// GET /browse?path=Q:\Users\... — list a directory by absolute path
+function handleBrowse(writer, abspath, done) {
+    log("Browse: " + abspath);
+    Windows.Storage.StorageFolder.getFolderFromPathAsync(abspath).then(function (folder) {
+        var tasks = [folder.getFilesAsync(), folder.getFoldersAsync()];
+        tasks[0].then(function (files) {
+            tasks[1].then(function (dirs) {
+                var result = {
+                    path: abspath,
+                    dirs:  dirs.map  ? dirs.map(function(d){return d.name;})  : toArray(dirs).map(function(d){return d.name;}),
+                    files: files.map ? files.map(function(f){return f.name;}) : toArray(files).map(function(f){return f.name;})
+                };
+                sendJson(writer, 200, result);
+                done();
+            }, function(e){ sendJson(writer, 500, {error:e.message, step:"dirs"}); done(); });
+        }, function(e){ sendJson(writer, 500, {error:e.message, step:"files"}); done(); });
+    }, function(e){
+        sendJson(writer, 404, {error:e.message||"not found", path:abspath});
+        done();
+    });
+}
+
+function toArray(winrtVector) {
+    var a = [];
+    if (!winrtVector) return a;
+    for (var i = 0; i < winrtVector.size; i++) a.push(winrtVector.getAt(i));
+    return a;
+}
+
+// Derive Dead Island DE packages folder from our own path
+// Our path: Q:\Users\UserMgr2\AppData\Local\Packages\Adoptsomekids.SaveBridge_...\LocalState
+// DI path:  Q:\Users\UserMgr2\AppData\Local\Packages\<DI_PFN>\SystemAppData\wgs
+function diPackagesRoot() {
+    var local = Windows.Storage.ApplicationData.current.localFolder.path;
+    // Go up: LocalState → SaveBridge pkg → Packages
+    return local.replace(/\\[^\\]+\\LocalState$/i, "");
+}
+
+// GET /di/list — enumerate all Packages to find Dead Island DE, then list wgs
+function handleDiList(writer, done) {
+    var pkgRoot = diPackagesRoot();
+    log("Packages root: " + pkgRoot);
+
+    Windows.Storage.StorageFolder.getFolderFromPathAsync(pkgRoot).then(function (pkgsFolder) {
+        return pkgsFolder.getFoldersAsync();
+    }).then(function (folders) {
+        // Look for Dead Island (TitleId 5433956 = 0x0052EA64, or name contains "island"/"52ea64")
+        var diFolder = null;
+        var allNames = [];
+        folders.forEach(function (f) {
+            allNames.push(f.name);
+            var n = f.name.toLowerCase();
+            if (n.indexOf("island") >= 0 || n.indexOf("52ea64") >= 0 ||
+                n.indexOf("5433956") >= 0 || n.indexOf("deadisland") >= 0 ||
+                n.indexOf("dead_island") >= 0) {
+                diFolder = f;
+            }
+        });
+
+        if (!diFolder) {
+            sendJson(writer, 200, {
+                found: false,
+                packagesRoot: pkgRoot,
+                hint: "Dead Island DE package not found — listing all packages",
+                allPackages: allNames
+            });
+            done();
+            return;
+        }
+
+        // Found — enumerate wgs
+        var wgsPath = diFolder.path + "\\SystemAppData\\wgs";
+        log("DI wgs path: " + wgsPath);
+
+        var result = { found: true, packageFolder: diFolder.name, wgsPath: wgsPath, users: [] };
+        Windows.Storage.StorageFolder.getFolderFromPathAsync(wgsPath).then(function (wgsFolder) {
+            return wgsFolder.getFoldersAsync();
+        }).then(function (userFolders) {
+            var pending = userFolders.size;
+            if (pending === 0) { sendJson(writer, 200, result); done(); return; }
+            userFolders.forEach(function (uf) {
+                var userObj = { xuid: uf.name, files: [], containers: [] };
+                result.users.push(userObj);
+                uf.getFilesAsync().then(function (files) {
+                    files.forEach(function (f) { userObj.files.push(f.name); });
+                    return uf.getFoldersAsync();
+                }).then(function (conFolders) {
+                    var cpending = conFolders.size;
+                    if (cpending === 0) { if (--pending === 0) { sendJson(writer, 200, result); done(); } return; }
+                    conFolders.forEach(function (cf) {
+                        var cObj = { guid: cf.name, blobs: [] };
+                        userObj.containers.push(cObj);
+                        cf.getFilesAsync().then(function (blobs) {
+                            blobs.forEach(function (b) { cObj.blobs.push(b.name); });
+                        }).then(null, function(){}).then(function () {
+                            if (--cpending === 0 && --pending === 0) { sendJson(writer, 200, result); done(); }
+                        });
+                    });
+                }, function () { if (--pending === 0) { sendJson(writer, 200, result); done(); } });
+            });
+        }, function (e) {
+            result.wgsError = e && e.message ? e.message : "wgs not found";
+            sendJson(writer, 200, result);
+            done();
+        });
+    }, function (e) {
+        sendJson(writer, 500, { error: e && e.message ? e.message : "packages not found", pkgRoot: pkgRoot });
+        done();
+    });
+}
+
+// GET /di/download?path=REL — download file relative to DI wgs folder
+function handleDiDownload(writer, relPath, done) {
+    var pkgRoot = diPackagesRoot();
+    log("DI download: " + relPath);
+
+    Windows.Storage.StorageFolder.getFolderFromPathAsync(pkgRoot).then(function (pkgsFolder) {
+        return pkgsFolder.getFoldersAsync();
+    }).then(function (folders) {
+        var diFolder = null;
+        folders.forEach(function (f) {
+            var n = f.name.toLowerCase();
+            if (n.indexOf("island") >= 0 || n.indexOf("52ea64") >= 0) diFolder = f;
+        });
+        if (!diFolder) { sendJson(writer, 404, {error:"Dead Island package not found"}); done(); return; }
+
+        var fullPath = diFolder.path + "\\SystemAppData\\wgs\\" + relPath.replace(/\//g, "\\");
+        Windows.Storage.StorageFile.getFileFromPathAsync(fullPath).then(function (file) {
+            return Windows.Storage.FileIO.readBufferAsync(file);
+        }).then(function (buf) {
+            var bytes = new Uint8Array(buf.length);
+            Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+            sendBinary(writer, bytes, relPath.split(/[\\/]/).pop());
+            done();
+        }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
+    }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
 }
 
 // ── HTTP response helpers ────────────────────────────────────────────────────
