@@ -49,6 +49,14 @@
     <!-- AssemblyInfo.cs provides all assembly attributes -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <NuGetPackageImportStamp></NuGetPackageImportStamp>
+    <!--
+      Suppress the Microsoft.NuGet.targets RuntimeIdentifier validation.
+      This check (line 389) requires a project.json with "win10" runtime
+      when NUP is a dependency. We supply BCL DLLs via explicit <Reference>
+      items injected by the workflow, so the runtime check is not needed.
+    -->
+    <RestoreProjectStyle>PackagesConfig</RestoreProjectStyle>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
   </PropertyGroup>
 
   <!-- ── Release config ─────────────────────────────────────────────── -->
