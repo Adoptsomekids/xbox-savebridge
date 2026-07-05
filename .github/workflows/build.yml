@@ -36,105 +36,7 @@ jobs:
             Write-Host "UWP workload install exit code: $LASTEXITCODE"
           } else {
             Write-Host "VS Installer not found at expected path."
-            Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\" -ErrorAction SilentlyContinue
           }
-
-      - name: Verify UWP XAML targets exist
-        shell: powershell
-        continue-on-error: true
-        run: |
-          $searchRoots = @(
-            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\WindowsXaml",
-            "C:\Program Files (x86)\MSBuild\Microsoft\WindowsXaml"
-          )
-          $found = $false
-          foreach ($root in $searchRoots) {
-            if (Test-Path $root) {
-              Write-Host "Found UWP XAML targets at: $root"
-              Get-ChildItem $root | ForEach-Object { Write-Host $_.Name }
-              $found = $true
-            }
-          }
-          if (-not $found) {
-            Write-Host "WindowsXaml targets not found in standard locations. Searching..."
-            Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" -Recurse -Filter "Microsoft.Windows.UI.Xaml.CSharp.targets" -ErrorAction SilentlyContinue |
-              Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
-          }
-
-      # Install Microsoft.NETCore.UniversalWindowsPlatform into packages/ folder.
-      # This package provides System.Runtime and other references needed by the
-      # XAML pre-compiler type universe. We use nuget install (not restore) so
-      # the package lands at a known path we can reference with HintPath.
-      - name: Setup NuGet
-        uses: NuGet/setup-nuget@v2
-        with:
-          nuget-version: '6.x'
-
-      - name: Install Microsoft.NETCore.UniversalWindowsPlatform package
-        shell: powershell
-        run: |
-          # Microsoft.Net.Native.Compiler is a delisted pre-release dep of NUP 6.2.14.
-          # We skip dependency resolution and download just the NUP nupkg directly,
-          # then expand it into packages/ so the .csproj Import can find its .props.
-          $pkgDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
-          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-
-          $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.universalwindowsplatform/6.2.14/microsoft.netcore.universalwindowsplatform.6.2.14.nupkg"
-          $nupkgPath = "$env:TEMP\nup.nupkg"
-          Write-Host "Downloading NUP 6.2.14 nupkg directly..."
-          Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkgPath -UseBasicParsing
-          Write-Host "Download exit: $LASTEXITCODE"
-
-          Write-Host "Expanding nupkg (rename to .zip first)..."
-          $zipPath = "$env:TEMP\nup.zip"
-          Copy-Item $nupkgPath $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $pkgDir -Force
-          Write-Host "Expansion done."
-
-          # Verify the .props and System.Runtime.dll exist
-          $props = Join-Path $pkgDir "build\uap10.0\Microsoft.NETCore.UniversalWindowsPlatform.props"
-          if (Test-Path $props) {
-            Write-Host "Props file found: $props"
-          } else {
-            Write-Host "Props file NOT found. Listing build/:"
-            Get-ChildItem (Join-Path $pkgDir "build") -Recurse | ForEach-Object { Write-Host $_.FullName }
-          }
-
-          Get-ChildItem $pkgDir -Recurse -Filter "System.Runtime.dll" |
-            ForEach-Object { Write-Host "System.Runtime.dll: $($_.FullName)" }
-
-      - name: Inject System.Runtime reference into project
-        shell: powershell
-        run: |
-          # The XAML compiler type universe needs System.Runtime.dll as a ReferencePath item.
-          # IMPORTANT: inject ONLY System.Runtime.dll. Injecting all 153 NUP DLLs causes
-          # CS5001 (no Main) because the extra mscorlib/BCL facades conflict with the SDK's
-          # own reference assemblies that are already provided by the UAP targets.
-          $pkgDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
-          $sysRuntimeDll = "$pkgDir\ref\uap10.0.15138\System.Runtime.dll"
-
-          if (-not (Test-Path $sysRuntimeDll)) {
-            Write-Host "System.Runtime.dll not found: $sysRuntimeDll"
-            exit 1
-          }
-          Write-Host "System.Runtime.dll: $sysRuntimeDll"
-
-          $csproj = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\SaveBridge.csproj"
-          $content = Get-Content $csproj -Raw
-
-          # Inject all System.Runtime.*.dll files from the NUP ref folder.
-          # These are BCL forwarding assemblies needed by the XAML type universe.
-          # We do NOT inject the full BCL (that causes CS5001 entry-point conflicts).
-          $refDir = "$pkgDir\ref\uap10.0.15138"
-          $runtimeDlls = Get-ChildItem $refDir -Filter "System.Runtime*.dll" |
-                         ForEach-Object { $_.FullName }
-          $items = ($runtimeDlls | ForEach-Object { "    <ReferencePath Include=`"$_`" />" }) -join "`n"
-          Write-Host ("Injecting " + $runtimeDlls.Count + " System.Runtime*.dll assemblies")
-          $injection = "<ItemGroup>`n$items`n  </ItemGroup>"
-
-          $patched = $content -replace '</Project>', "  $injection`n</Project>"
-          Set-Content $csproj $patched -Encoding UTF8
-          Write-Host "Injected System.Runtime.dll ReferencePath into SaveBridge.csproj"
 
       - name: Build APPX (ARM64)
         shell: powershell
@@ -179,7 +81,7 @@ jobs:
               echo "appx_name=$($msix.Name)" >> $env:GITHUB_OUTPUT
             } else {
               Write-Host "Listing all build output..."
-              Get-ChildItem -Recurse -Include "*.appx","*.appxbundle","*.msix","*.msixbundle","*.exe"
+              Get-ChildItem -Recurse -Include "*.appx","*.appxbundle","*.msix","*.msixbundle"
             }
           }
 
