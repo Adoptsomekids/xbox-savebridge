@@ -49,15 +49,17 @@ jobs:
           # Copy all published binaries
           Copy-Item "publish\SaveBridge\*" $layout -Recurse -Force
 
-          # Copy Package.appxmanifest
-          Copy-Item "SaveBridge\SaveBridge\SaveBridge\Package.appxmanifest" "$layout\AppxManifest.xml" -Force
+          # Copy Package.appxmanifest (repo root -> SaveBridge\SaveBridge\Package.appxmanifest)
+          Copy-Item "SaveBridge\SaveBridge\Package.appxmanifest" "$layout\AppxManifest.xml" -Force
 
           # Copy assets (must be in Assets\ subfolder matching manifest)
           New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
-          Copy-Item "SaveBridge\SaveBridge\SaveBridge\Assets\*" "$layout\Assets\" -Force
+          Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layout\Assets\" -Force
 
-          Write-Host "APPX layout:"
-          Get-ChildItem $layout -Recurse | Select-Object FullName | Format-Table
+          Write-Host "APPX layout (top-level):"
+          Get-ChildItem $layout | Select-Object Name,Length | Format-Table
+          Write-Host "Assets:"
+          Get-ChildItem "$layout\Assets" | Select-Object Name | Format-Table
 
       # Create self-signed cert (CN=Adoptsomekids matches Package.appxmanifest Publisher)
       - name: Create signing certificate
