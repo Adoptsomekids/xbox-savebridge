@@ -120,14 +120,14 @@ namespace SaveBridge
         private async Task HandleListAsync(HttpListenerResponse resp)
         {
             // List all game save containers (save slots)
-            var query = _provider.CreateContainerQuery();
+            var query = _provider.GetContainerQuery();
             var containers = await query.GetContainersAsync();
 
             var names = new List<string>();
             foreach (var container in containers.Value)
             {
-                // Each container holds blobs — list them
-                var blobQuery = container.CreateBlobQuery();
+                // Each container holds blobs - list them
+                var blobQuery = container.GetBlobQuery();
                 var blobs     = await blobQuery.GetBlobsAsync();
                 foreach (var blob in blobs.Value)
                     names.Add($"{container.Name}/{blob.Name}");
@@ -147,10 +147,13 @@ namespace SaveBridge
             }
 
             var container = _provider.CreateContainer(parts[0]);
-            var readResult = await container.ReadAsync(new Dictionary<string, object>
+            // ReadAsync requires IReadOnlyDictionary<string, IBuffer>
+            // Pass an empty buffer placeholder; the API fills it with the actual data
+            var readInput = new Dictionary<string, Windows.Storage.Streams.IBuffer>
             {
-                [parts[1]] = (object)(uint)0  // placeholder — actual size set by API
-            });
+                [parts[1]] = new Windows.Storage.Streams.Buffer(0)
+            };
+            var readResult = await container.ReadAsync(readInput);
 
             if (readResult.Status != GameSaveErrorStatus.Ok)
             {
