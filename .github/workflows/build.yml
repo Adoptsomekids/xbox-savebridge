@@ -61,7 +61,7 @@ jobs:
               Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
           }
 
-      # No PackageReference — project uses no external NuGet packages.
+      # No PackageReference: project uses no external NuGet packages.
       # System.Runtime and Windows SDK types are provided by the UWP platform SDK.
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
@@ -71,8 +71,8 @@ jobs:
       - name: Restore NuGet packages
         shell: powershell
         run: |
-          Write-Host "No external packages to restore (UWP SDK types come from the platform)."
-          Write-Host "Skipping restore — no packages.config or PackageReferences."
+          Write-Host "No external packages to restore."
+          Write-Host "UWP SDK types (System.Runtime, Windows.Gaming.XboxLive.Storage) come from the platform SDK."
 
       - name: Build APPX (ARM64)
         shell: powershell
@@ -109,7 +109,7 @@ jobs:
             echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
             echo "appx_name=$($appx.Name)" >> $env:GITHUB_OUTPUT
           } else {
-            Write-Host "No .appxbundle — checking .msixbundle..."
+            Write-Host "No .appxbundle found, checking for .msixbundle..."
             $msix = Get-ChildItem -Recurse -Filter "*.msixbundle" | Select-Object -First 1
             if ($msix) {
               Write-Host "Found MSIX: $($msix.FullName)"
