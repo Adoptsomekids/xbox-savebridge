@@ -85,8 +85,10 @@ jobs:
           Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkgPath -UseBasicParsing
           Write-Host "Download exit: $LASTEXITCODE"
 
-          Write-Host "Expanding nupkg..."
-          Expand-Archive -Path $nupkgPath -DestinationPath $pkgDir -Force
+          Write-Host "Expanding nupkg (rename to .zip first)..."
+          $zipPath = "$env:TEMP\nup.zip"
+          Copy-Item $nupkgPath $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $pkgDir -Force
           Write-Host "Expansion done."
 
           # Verify the .props and System.Runtime.dll exist
