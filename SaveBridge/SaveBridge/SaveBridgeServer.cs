@@ -24,8 +24,8 @@ namespace SaveBridge
         private const string DEAD_ISLAND_SCID = "db860100-d780-4e17-8685-ad130052ea64";
         private const int PORT = 8765;
 
-        private HttpListener _listener;
-        private GameSaveProvider _provider;
+        private HttpListener? _listener;
+        private GameSaveProvider? _provider;
 
         public async Task StartAsync()
         {
@@ -66,7 +66,7 @@ namespace SaveBridge
             var resp = ctx.Response;
             try
             {
-                var path  = req.Url.AbsolutePath.TrimEnd('/').ToLowerInvariant();
+                var path  = req.Url!.AbsolutePath.TrimEnd('/').ToLowerInvariant();
                 var qs    = req.QueryString;
                 Log(req.HttpMethod + " " + req.Url.PathAndQuery);
 
@@ -156,7 +156,7 @@ namespace SaveBridge
                 return;
             }
 
-            Windows.Storage.Streams.IBuffer buffer;
+            Windows.Storage.Streams.IBuffer? buffer;
             if (!getResult.Value.TryGetValue(blobName, out buffer) || buffer == null)
             {
                 await WriteJson(resp, 404,

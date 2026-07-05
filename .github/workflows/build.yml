@@ -123,23 +123,43 @@ jobs:
             echo "bundle_name=$($appx.Name)"     >> $env:GITHUB_OUTPUT
           }
 
-      - name: Upload APPX artifact
+      # Resolve which path to upload (sign step wins; fallback step is second)
+      - name: Set artifact path
         if: success()
+        id: artifact_path
+        shell: powershell
+        run: |
+          $p = "${{ steps.sign_appx.outputs.bundle_path }}"
+          if (-not $p) { $p = "${{ steps.find_appx.outputs.bundle_path }}" }
+          if ($p) {
+            echo "path=$p" >> $env:GITHUB_OUTPUT
+            Write-Host "Artifact path: $p"
+          } else {
+            Write-Host "No artifact path found - searching..."
+            $f = Get-ChildItem -Recurse -Include "*.appxbundle","*.msixbundle","*.appx","*.msix" | Select-Object -First 1
+            if ($f) {
+              echo "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
+              Write-Host "Found: $($f.FullName)"
+            }
+          }
+
+      - name: Upload APPX artifact
+        if: success() && steps.artifact_path.outputs.path != ''
         uses: actions/upload-artifact@v4
         with:
           name: SaveBridge-APPX
           path: |
-            ${{ steps.sign_appx.outputs.bundle_path || steps.find_appx.outputs.bundle_path }}
+            ${{ steps.artifact_path.outputs.path }}
             ${{ github.workspace }}\SaveBridge-DevCert.cer
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload to Release
-        if: github.event_name == 'release' && (steps.sign_appx.outputs.bundle_path != '' || steps.find_appx.outputs.bundle_path != '')
+        if: github.event_name == 'release' && steps.artifact_path.outputs.path != ''
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.sign_appx.outputs.bundle_path || steps.find_appx.outputs.bundle_path }}
+            ${{ steps.artifact_path.outputs.path }}
             ${{ github.workspace }}\SaveBridge-DevCert.cer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
