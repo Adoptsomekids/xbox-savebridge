@@ -1,0 +1,64 @@
+name: Build APPX (Windows)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'SaveBridge/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # allow manual trigger from GitHub UI
+  release:
+    types: [ created ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore SaveBridge/SaveBridge.sln
+
+      - name: Build APPX (ARM64 — Xbox Series X)
+        run: |
+          msbuild SaveBridge/SaveBridge.sln `
+            /p:Configuration=Release `
+            /p:Platform=ARM64 `
+            /p:AppxBundle=Always `
+            /p:AppxBundlePlatforms="ARM64" `
+            /p:AppxPackageSigningEnabled=false `
+            /p:UapAppxPackageBuildMode=SideloadOnly `
+            /p:GenerateAppInstallerFile=false `
+            /t:Build
+
+      - name: Find APPX output
+        id: find_appx
+        run: |
+          $appx = Get-ChildItem -Recurse -Filter "*.appxbundle" | Select-Object -First 1
+          echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
+          echo "appx_name=$($appx.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload APPX as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SaveBridge-APPX
+          path: ${{ steps.find_appx.outputs.appx_path }}
+          retention-days: 30
+
+      - name: Upload to Release (on release event)
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find_appx.outputs.appx_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

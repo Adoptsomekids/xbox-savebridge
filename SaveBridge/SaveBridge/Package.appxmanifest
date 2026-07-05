@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap4="http://schemas.microsoft.com/appx/manifest/uap/windows10/4"
+  xmlns:xbox="http://schemas.microsoft.com/appx/manifest/xbox/windows10"
+  IgnorableNamespaces="uap mp uap4 xbox">
+
+  <Identity
+    Name="Adoptsomekids.SaveBridge"
+    Publisher="CN=Adoptsomekids"
+    Version="1.0.0.0" />
+
+  <mp:PhoneIdentity
+    PhoneProductId="00000000-0000-0000-0000-000000000000"
+    PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+
+  <Properties>
+    <DisplayName>SaveBridge</DisplayName>
+    <PublisherDisplayName>Adoptsomekids</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- Requires Xbox OS — runs only on Xbox One / Series X in Developer Mode -->
+    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="SaveBridge.App">
+      <uap:VisualElements
+        DisplayName="SaveBridge"
+        Square150x150Logo="Assets\Square150x150Logo.scale-200.png"
+        Square44x44Logo="Assets\Square44x44Logo.scale-200.png"
+        Description="Universal Xbox game save bridge — exposes Connected Storage over local HTTP"
+        BackgroundColor="#1a1a2e">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.scale-200.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.scale-200.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- HTTP server on local network -->
+    <Capability Name="internetClientServer" />
+    <Capability Name="privateNetworkClientServer" />
+    <!-- Xbox-specific: access Connected Storage for any title the user owns -->
+    <xbox:Capability Name="connectedStorageAccess" />
+  </Capabilities>
+
+</Package>
