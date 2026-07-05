@@ -74,6 +74,42 @@ jobs:
           Write-Host "No external packages to restore."
           Write-Host "UWP SDK types (System.Runtime, Windows.Gaming.XboxLive.Storage) come from the platform SDK."
 
+      - name: Find System.Runtime path for XAML compiler
+        shell: powershell
+        id: find_sysruntime
+        run: |
+          # The XAML compiler (XamlCompiler/WMC1006) requires System.Runtime.dll
+          # in its type universe. Find it on this runner.
+          $candidates = @(
+            "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETCore\v4.5",
+            "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETCore\v4.5.1",
+            "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\v4.0",
+            "C:\Windows\Microsoft.NET\Framework64\v4.0.30319",
+            "C:\Windows\Microsoft.NET\Framework\v4.0.30319"
+          )
+          $found = ""
+          foreach ($dir in $candidates) {
+            $dll = Join-Path $dir "System.Runtime.dll"
+            if (Test-Path $dll) {
+              Write-Host "Found System.Runtime.dll at: $dll"
+              $found = $dir
+              break
+            }
+          }
+          if (-not $found) {
+            Write-Host "System.Runtime.dll not found in standard locations, searching..."
+            $dll = Get-ChildItem "C:\Program Files (x86)" -Recurse -Filter "System.Runtime.dll" -ErrorAction SilentlyContinue |
+              Where-Object { $_.DirectoryName -like "*Reference*" -or $_.DirectoryName -like "*NETCore*" } |
+              Select-Object -First 1
+            if ($dll) {
+              Write-Host "Found at: $($dll.FullName)"
+              $found = $dll.DirectoryName
+            } else {
+              Write-Host "System.Runtime.dll not found anywhere under Program Files (x86)"
+            }
+          }
+          echo "sysruntime_dir=$found" >> $env:GITHUB_OUTPUT
+
       - name: Build APPX (ARM64)
         shell: powershell
         run: |
@@ -83,6 +119,9 @@ jobs:
           if (-not $msbuild) { $msbuild = "msbuild" }
           Write-Host "Using MSBuild: $msbuild"
 
+          $sysRuntimeDir = "${{ steps.find_sysruntime.outputs.sysruntime_dir }}"
+          Write-Host "System.Runtime path: $sysRuntimeDir"
+
           & $msbuild SaveBridge/SaveBridge.sln `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
@@ -91,6 +130,7 @@ jobs:
             /p:AppxPackageSigningEnabled=false `
             /p:UapAppxPackageBuildMode=SideloadOnly `
             /p:GenerateAppInstallerFile=false `
+            /p:AdditionalLibPaths="$sysRuntimeDir" `
             /t:Build `
             /m `
             /v:normal
