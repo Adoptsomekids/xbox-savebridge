@@ -22,8 +22,8 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v10-js loaded, auto-starting server...");
-    startServer();
+    log("SaveBridge v11-js loaded. Auto-starting...");
+    setTimeout(startServer, 500);
 });
 
 // ── Server start / stop ─────────────────────────────────────────────────────
@@ -37,20 +37,22 @@ function startServer() {
         _listener = new Windows.Networking.Sockets.StreamSocketListener();
         _listener.addEventListener("connectionreceived", onConnection);
 
-        var bindOp = _listener.bindServiceNameAsync(String(PORT));
-        bindOp.oncomplete = function () {
-            _running = true;
-            document.getElementById("btnStop").disabled = false;
-            setStatus("Running — port " + PORT, "#81c784");
-            setAddr("http://<xbox-ip>:" + PORT + "/status");
-            log("SaveBridge listening on port " + PORT + "  ✓");
-        };
-        bindOp.onerror = function (ev) {
-            var msg = ev.detail ? ev.detail.message : String(ev);
-            log("ERROR binding: " + msg);
-            setStatus("Bind error — see log", "#ef5350");
-            document.getElementById("btnStart").disabled = false;
-        };
+        // Use .then() — available on WinRT IAsyncAction natively in WWAHost
+        _listener.bindServiceNameAsync(String(PORT)).then(
+            function () {
+                _running = true;
+                document.getElementById("btnStop").disabled = false;
+                setStatus("Running — port " + PORT, "#81c784");
+                setAddr("http://<xbox-ip>:" + PORT + "/status");
+                log("SaveBridge listening on port " + PORT + "  ✓");
+            },
+            function (err) {
+                var msg = err && err.message ? err.message : String(err);
+                log("ERROR binding port " + PORT + ": " + msg);
+                setStatus("Bind error — see log", "#ef5350");
+                document.getElementById("btnStart").disabled = false;
+            }
+        );
     } catch (ex) {
         log("EXCEPTION in startServer: " + (ex.message || ex));
         setStatus("Exception — see log", "#ef5350");
@@ -82,13 +84,10 @@ function onConnection(ev) {
     var head = "";
     var contentLength = 0;
 
+    // Use .then() for WinRT async in WWAHost
     function readNextByte() {
-        var op = reader.loadAsync(1);
-        op.oncomplete = function () {
-            if (reader.unconsumedBufferLength === 0) {
-                finishWithBody();
-                return;
-            }
+        reader.loadAsync(1).then(function (loaded) {
+            if (loaded === 0) { finishWithBody(); return; }
             head += String.fromCharCode(reader.readByte());
             if (head.slice(-4) === "\r\n\r\n") {
                 var m = head.match(/[Cc]ontent-[Ll]ength:\s*(\d+)/);
@@ -97,28 +96,22 @@ function onConnection(ev) {
             } else {
                 readNextByte();
             }
-        };
-        op.onerror = function (ev) {
-            log("Read error from " + remote + ": " + (ev.detail ? ev.detail.message : ev));
+        }, function (err) {
+            log("Read error from " + remote + ": " + (err && err.message ? err.message : err));
             try { socket.close(); } catch(e){}
-        };
+        });
     }
 
     function finishWithBody() {
-        if (contentLength === 0) {
-            dispatch(head, new Uint8Array(0), remote, socket);
-            return;
-        }
-        var op2 = reader.loadAsync(contentLength);
-        op2.oncomplete = function () {
+        if (contentLength === 0) { dispatch(head, new Uint8Array(0), remote, socket); return; }
+        reader.loadAsync(contentLength).then(function () {
             var bytes = new Uint8Array(contentLength);
             reader.readBytes(bytes);
             dispatch(head, bytes, remote, socket);
-        };
-        op2.onerror = function (ev) {
-            log("Body read error: " + (ev.detail ? ev.detail.message : ev));
+        }, function (err) {
+            log("Body read error: " + (err && err.message ? err.message : err));
             try { socket.close(); } catch(e){}
-        };
+        });
     }
 
     readNextByte();
@@ -141,14 +134,12 @@ function dispatch(head, bodyBytes, remote, socket) {
     var writer = new Windows.Storage.Streams.DataWriter(socket.outputStream);
 
     function done() {
-        var storeOp = writer.storeAsync();
-        storeOp.oncomplete = function () {
+        writer.storeAsync().then(function () {
             writer.detachStream();
             try { socket.close(); } catch(e){}
-        };
-        storeOp.onerror = function () {
+        }, function () {
             try { socket.close(); } catch(e){}
-        };
+        });
     }
 
     if (path === "/status" && method === "GET") {
@@ -182,68 +173,44 @@ function wgsBase() {
 }
 
 function handleWgsList(writer, done) {
-    var base = wgsBase();
-    log("WGS base: " + base);
+    var base   = wgsBase();
     var result = { wgsBase: base, users: [] };
+    log("WGS base: " + base);
 
-    var op = Windows.Storage.StorageFolder.getFolderFromPathAsync(base);
-    op.oncomplete = function (ev) {
-        var wgsFolder = ev.target.result;
-        var op2 = wgsFolder.getFoldersAsync();
-        op2.oncomplete = function (ev2) {
-            var userFolders = ev2.target.result;
-            var pending = userFolders.size;
-            if (pending === 0) { sendJson(writer, 200, result); done(); return; }
+    Windows.Storage.StorageFolder.getFolderFromPathAsync(base).then(function (wgsFolder) {
+        return wgsFolder.getFoldersAsync();
+    }).then(function (userFolders) {
+        var pending = userFolders.size;
+        if (pending === 0) { sendJson(writer, 200, result); done(); return; }
 
-            userFolders.forEach(function (uf) {
-                var userObj = { xuid: uf.name, files: [], containers: [] };
-                result.users.push(userObj);
+        userFolders.forEach(function (uf) {
+            var userObj = { xuid: uf.name, files: [], containers: [] };
+            result.users.push(userObj);
 
-                var fop = uf.getFilesAsync();
-                fop.oncomplete = function (fe) {
-                    fe.target.result.forEach(function (f) { userObj.files.push(f.name); });
-
-                    var cop = uf.getFoldersAsync();
-                    cop.oncomplete = function (ce) {
-                        var conFolders = ce.target.result;
-                        var cpending   = conFolders.size;
-                        if (cpending === 0) { if (--pending === 0) { sendJson(writer, 200, result); done(); } return; }
-
-                        conFolders.forEach(function (cf) {
-                            var cObj = { guid: cf.name, blobs: [] };
-                            userObj.containers.push(cObj);
-                            var bop = cf.getFilesAsync();
-                            bop.oncomplete = function (be) {
-                                be.target.result.forEach(function (b) { cObj.blobs.push(b.name); });
-                                if (--cpending === 0 && --pending === 0) {
-                                    sendJson(writer, 200, result);
-                                    done();
-                                }
-                            };
-                            bop.onerror = function () {
-                                if (--cpending === 0 && --pending === 0) {
-                                    sendJson(writer, 200, result);
-                                    done();
-                                }
-                            };
-                        });
-                    };
-                    cop.onerror = function () { if (--pending === 0) { sendJson(writer, 200, result); done(); } };
-                };
-                fop.onerror = function () { if (--pending === 0) { sendJson(writer, 200, result); done(); } };
+            uf.getFilesAsync().then(function (files) {
+                files.forEach(function (f) { userObj.files.push(f.name); });
+                return uf.getFoldersAsync();
+            }).then(function (conFolders) {
+                var cpending = conFolders.size;
+                if (cpending === 0) { if (--pending === 0) { sendJson(writer, 200, result); done(); } return; }
+                conFolders.forEach(function (cf) {
+                    var cObj = { guid: cf.name, blobs: [] };
+                    userObj.containers.push(cObj);
+                    cf.getFilesAsync().then(function (blobs) {
+                        blobs.forEach(function (b) { cObj.blobs.push(b.name); });
+                    }).then(null, function(){}).then(function () {
+                        if (--cpending === 0 && --pending === 0) { sendJson(writer, 200, result); done(); }
+                    });
+                });
+            }, function () {
+                if (--pending === 0) { sendJson(writer, 200, result); done(); }
             });
-        };
-        op2.onerror = function (e) {
-            sendJson(writer, 500, {error: e.detail ? e.detail.message : "getFolders failed"});
-            done();
-        };
-    };
-    op.onerror = function (e) {
-        var msg = e.detail ? e.detail.message : "folder not found";
-        log("WGS folder error: " + msg);
-        sendJson(writer, 500, {error: msg, wgsBase: base});
+        });
+    }, function (e) {
+        log("WGS base not found: " + (e && e.message ? e.message : e));
+        sendJson(writer, 500, { error: "wgs folder not found", wgsBase: base });
         done();
-    };
+    });
 }
 
 function handleWgsDownload(writer, relPath, done) {
@@ -251,28 +218,18 @@ function handleWgsDownload(writer, relPath, done) {
     var fullPath = base + "\\" + relPath.replace(/\//g, "\\");
     log("WGS download: " + fullPath);
 
-    var op = Windows.Storage.StorageFile.getFileFromPathAsync(fullPath);
-    op.oncomplete = function (ev) {
-        var file = ev.target.result;
-        var rop  = Windows.Storage.FileIO.readBufferAsync(file);
-        rop.oncomplete = function (re) {
-            var buf   = re.target.result;
-            var bytes = new Uint8Array(buf.length);
-            var dr    = Windows.Storage.Streams.DataReader.fromBuffer(buf);
-            dr.readBytes(bytes);
-            sendBinary(writer, bytes, relPath.split(/[\\/]/).pop());
-            done();
-            log("  → " + bytes.length + " bytes sent");
-        };
-        rop.onerror = function (e) {
-            sendJson(writer, 500, {error: e.detail ? e.detail.message : "readBuffer failed"});
-            done();
-        };
-    };
-    op.onerror = function (e) {
-        sendJson(writer, 404, {error: e.detail ? e.detail.message : "file not found", path: fullPath});
+    Windows.Storage.StorageFile.getFileFromPathAsync(fullPath).then(function (file) {
+        return Windows.Storage.FileIO.readBufferAsync(file);
+    }).then(function (buf) {
+        var bytes = new Uint8Array(buf.length);
+        Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+        sendBinary(writer, bytes, relPath.split(/[\\/]/).pop());
         done();
-    };
+        log("  → " + bytes.length + " bytes");
+    }, function (e) {
+        sendJson(writer, 500, { error: e && e.message ? e.message : "read error" });
+        done();
+    });
 }
 
 function handleWgsUpload(writer, relPath, bodyBytes, done) {
@@ -282,39 +239,35 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
     var fname    = fullPath.substring(fullPath.lastIndexOf("\\") + 1);
     log("WGS upload: " + fullPath + " (" + bodyBytes.length + " bytes)");
 
-    var op = Windows.Storage.StorageFolder.getFolderFromPathAsync(dir);
-    op.oncomplete = function (ev) { writeFile(ev.target.result); };
-    op.onerror    = function ()   {
-        // Try creating parent folder
+    function writeToFolder(folder) {
+        folder.createFileAsync(fname, Windows.Storage.CreationCollisionOption.replaceExisting)
+        .then(function (file) {
+            var dw = new Windows.Storage.Streams.DataWriter();
+            dw.writeBytes(bodyBytes);
+            return Windows.Storage.FileIO.writeBufferAsync(file, dw.detachBuffer());
+        }).then(function () {
+            sendJson(writer, 200, { ok: true, bytes: bodyBytes.length, path: relPath });
+            done();
+        }, function (e) {
+            sendJson(writer, 500, { error: e && e.message ? e.message : "write error" });
+            done();
+        });
+    }
+
+    Windows.Storage.StorageFolder.getFolderFromPathAsync(dir).then(function (f) {
+        writeToFolder(f);
+    }, function () {
         var parent = dir.substring(0, dir.lastIndexOf("\\"));
         var child  = dir.substring(dir.lastIndexOf("\\") + 1);
-        var pop = Windows.Storage.StorageFolder.getFolderFromPathAsync(parent);
-        pop.oncomplete = function (pe) {
-            var cop = pe.target.result.createFolderAsync(child,
-                Windows.Storage.CreationCollisionOption.openIfExists);
-            cop.oncomplete = function (ce) { writeFile(ce.target.result); };
-            cop.onerror    = function (e)  { sendJson(writer, 500, {error: "mkdir: " + (e.detail||{}).message}); done(); };
-        };
-        pop.onerror = function (e) { sendJson(writer, 500, {error: "parent: " + (e.detail||{}).message}); done(); };
-    };
-
-    function writeFile(folder) {
-        var cfop = folder.createFileAsync(fname,
-            Windows.Storage.CreationCollisionOption.replaceExisting);
-        cfop.oncomplete = function (ce) {
-            var file = ce.target.result;
-            var dw   = new Windows.Storage.Streams.DataWriter();
-            dw.writeBytes(bodyBytes);
-            var ibuf = dw.detachBuffer();
-            var wop  = Windows.Storage.FileIO.writeBufferAsync(file, ibuf);
-            wop.oncomplete = function () {
-                sendJson(writer, 200, {ok:true, bytes:bodyBytes.length, path:relPath});
-                done();
-            };
-            wop.onerror = function (e) { sendJson(writer, 500, {error: (e.detail||{}).message}); done(); };
-        };
-        cfop.onerror = function (e) { sendJson(writer, 500, {error: (e.detail||{}).message}); done(); };
-    }
+        Windows.Storage.StorageFolder.getFolderFromPathAsync(parent).then(function (pf) {
+            return pf.createFolderAsync(child, Windows.Storage.CreationCollisionOption.openIfExists);
+        }).then(function (f) {
+            writeToFolder(f);
+        }, function (e) {
+            sendJson(writer, 500, { error: e && e.message ? e.message : "mkdir error" });
+            done();
+        });
+    });
 }
 
 // ── HTTP response helpers ────────────────────────────────────────────────────
