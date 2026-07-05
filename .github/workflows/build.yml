@@ -182,6 +182,62 @@ jobs:
           }
           exit 0
 
+      # Download the framework dependency packages required by the Xbox:
+      #   - Microsoft.VCLibs.140.00.UWPDesktop x64
+      #   - Microsoft.NET.CoreRuntime.2.2 x64
+      # These must be uploaded alongside the main bundle when sideloading.
+      - name: Collect framework dependency packages
+        if: success()
+        shell: powershell
+        run: |
+          $depsDir = "$env:GITHUB_WORKSPACE\deps"
+          New-Item -ItemType Directory -Force -Path $depsDir | Out-Null
+
+          # VCLibs - available in the Windows SDK ExtensionSDKs
+          $vcLibsSearch = @(
+            "C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx",
+            "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\v142\appx\Microsoft.VCLibs.x64.14.00.appx"
+          )
+          foreach ($p in $vcLibsSearch) {
+            if (Test-Path $p) {
+              Copy-Item $p "$depsDir\Microsoft.VCLibs.x64.14.00.appx"
+              Write-Host "VCLibs: $p"
+              break
+            }
+          }
+
+          # .NET Core Runtime - download from NuGet
+          $rtUrl = "https://aka.ms/Microsoft.NET.CoreRuntime.2.2.x64"
+          $rtDest = "$depsDir\Microsoft.NET.CoreRuntime.2.2.x64.appx"
+          try {
+            Invoke-WebRequest -Uri $rtUrl -OutFile $rtDest -UseBasicParsing -ErrorAction Stop
+            Write-Host "Downloaded CoreRuntime from aka.ms"
+          } catch {
+            Write-Host "aka.ms failed, trying direct..."
+            # Try NuGet feed
+            $rtUrl2 = "https://api.nuget.org/v3-flatcontainer/runtime.win10-x64.microsoft.net.coreruntime/2.2.28604.0/runtime.win10-x64.microsoft.net.coreruntime.2.2.28604.0.nupkg"
+            try {
+              Invoke-WebRequest -Uri $rtUrl2 -OutFile "$depsDir\coreruntime.nupkg" -UseBasicParsing
+              Write-Host "Downloaded CoreRuntime nupkg"
+            } catch {
+              Write-Host "CoreRuntime download failed: $_"
+            }
+          }
+
+          # Also look in the VS install for any pre-staged framework appx files
+          $vsFrameworks = Get-ChildItem "C:\Program Files (x86)\Microsoft SDKs" -Recurse -Filter "*.appx" -EA SilentlyContinue |
+            Where-Object { $_.Name -match "VCLibs|CoreRuntime" -and $_.FullName -match "x64" }
+          foreach ($f in $vsFrameworks) {
+            $dest = "$depsDir\$($f.Name)"
+            if (-not (Test-Path $dest)) {
+              Copy-Item $f.FullName $dest
+              Write-Host "Copied: $($f.FullName)"
+            }
+          }
+
+          Write-Host "=== deps folder ==="
+          Get-ChildItem $depsDir | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1KB))KB)" }
+
       - name: Find APPX output
         if: success()
         shell: powershell
@@ -198,7 +254,7 @@ jobs:
             Get-ChildItem -Recurse -Include "*.appx","*.appxbundle","*.msix","*.msixbundle"
           }
 
-      - name: Upload APPX + certificate artifacts
+      - name: Upload APPX + certificate + dependencies
         if: success() && steps.find_appx.outputs.appx_path != ''
         uses: actions/upload-artifact@v4
         with:
@@ -206,6 +262,7 @@ jobs:
           path: |
             ${{ steps.find_appx.outputs.appx_path }}
             ${{ github.workspace }}/SaveBridge-DevCert.cer
+            ${{ github.workspace }}/deps/
           retention-days: 30
 
       - name: Upload to Release
