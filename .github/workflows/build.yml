@@ -14,7 +14,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2022  # VS 2022 with UWP workload available
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
@@ -26,7 +26,6 @@ jobs:
       - name: Install UWP workload for Visual Studio
         shell: powershell
         run: |
-          # Locate the VS installer
           $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
           if (Test-Path $vsInstaller) {
             Write-Host "Installing UWP workload..."
@@ -36,57 +35,59 @@ jobs:
               --quiet --norestart --force 2>&1
             Write-Host "UWP workload install exit code: $LASTEXITCODE"
           } else {
-            Write-Host "VS Installer not found at expected path, checking alternatives..."
-            $vsInstaller2 = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
-            if (Test-Path $vsInstaller2) {
-              Write-Host "Found at $vsInstaller2"
-            } else {
-              Write-Host "Listing VS paths..."
-              Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\" -ErrorAction SilentlyContinue
-            }
+            Write-Host "VS Installer not found, listing directory..."
+            Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\" -ErrorAction SilentlyContinue
           }
 
-      - name: Verify UWP targets exist
+      - name: Verify UWP XAML targets exist
         shell: powershell
         run: |
-          $paths = @(
+          $searchRoots = @(
             "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\WindowsXaml",
-            "C:\Program Files (x86)\MSBuild\Microsoft\WindowsXaml",
-            "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\WindowsXaml"
+            "C:\Program Files (x86)\MSBuild\Microsoft\WindowsXaml"
           )
-          foreach ($p in $paths) {
-            if (Test-Path $p) {
-              Write-Host "Found UWP targets at: $p"
-              Get-ChildItem $p
+          $found = $false
+          foreach ($root in $searchRoots) {
+            if (Test-Path $root) {
+              Write-Host "✓ Found UWP XAML targets at: $root"
+              Get-ChildItem $root | ForEach-Object { Write-Host "  $($_.Name)" }
+              $found = $true
             }
           }
+          if (-not $found) {
+            Write-Host "Searching entire VS install for WindowsXaml targets..."
+            Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" -Recurse -Filter "Microsoft.Windows.UI.Xaml.CSharp.targets" -ErrorAction SilentlyContinue |
+              Select-Object -First 5 | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
+          }
 
+      # NuGet v5+ is required for PackageReference support in legacy .csproj files
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
+        with:
+          nuget-version: '6.x'
 
       - name: Restore NuGet packages
         shell: powershell
         run: |
-          nuget restore SaveBridge/SaveBridge.sln
+          Write-Host "Restoring packages for SaveBridge solution..."
+          nuget restore SaveBridge/SaveBridge.sln -Verbosity normal
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "NuGet restore failed, trying dotnet restore..."
-            dotnet restore SaveBridge/SaveBridge.sln
+            Write-Host "nuget restore failed (exit $LASTEXITCODE), trying msbuild /t:Restore..."
+            $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild `
+              -find MSBuild\**\Bin\MSBuild.exe
+            & $msbuild SaveBridge/SaveBridge.sln /t:Restore /p:Configuration=Release /p:Platform=ARM64 /v:minimal
           }
 
       - name: Build APPX (ARM64)
         shell: powershell
         run: |
-          # Find MSBuild
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
             -latest -requires Microsoft.Component.MSBuild `
             -find MSBuild\**\Bin\MSBuild.exe
-          
-          if (-not $msbuild) {
-            $msbuild = "msbuild"  # fallback to PATH
-          }
-          
+          if (-not $msbuild) { $msbuild = "msbuild" }
           Write-Host "Using MSBuild: $msbuild"
-          
+
           & $msbuild SaveBridge/SaveBridge.sln `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
@@ -97,8 +98,8 @@ jobs:
             /p:GenerateAppInstallerFile=false `
             /t:Build `
             /m `
-            /v:minimal
-          
+            /v:normal
+
           Write-Host "Build exit code: $LASTEXITCODE"
           exit $LASTEXITCODE
 
@@ -113,7 +114,7 @@ jobs:
             echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
             echo "appx_name=$($appx.Name)" >> $env:GITHUB_OUTPUT
           } else {
-            Write-Host "No .appxbundle found — checking for .msixbundle..."
+            Write-Host "No .appxbundle — checking .msixbundle..."
             $msix = Get-ChildItem -Recurse -Filter "*.msixbundle" | Select-Object -First 1
             if ($msix) {
               Write-Host "Found MSIX: $($msix.FullName)"

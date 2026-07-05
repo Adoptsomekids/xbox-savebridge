@@ -7,7 +7,7 @@
     <Grid>
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="80">
             <TextBlock
-                Text="🧟 SaveBridge"
+                Text="SaveBridge"
                 FontSize="48"
                 FontWeight="Bold"
                 Foreground="#e94560"

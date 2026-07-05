@@ -24,6 +24,12 @@
     <AppxBundle>Always</AppxBundle>
     <AppxBundlePlatforms>ARM64</AppxBundlePlatforms>
     <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
+    <!-- Suppress auto-generated AssemblyInfo to avoid duplicates -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- C# 8 required for 'using var' syntax -->
+    <LangVersion>8.0</LangVersion>
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|ARM64'">
@@ -41,6 +47,13 @@
     <Optimize>false</Optimize>
   </PropertyGroup>
 
+  <!-- Microsoft.NETCore.UniversalWindowsPlatform — provides System.Runtime and UWP type universe -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
+      <Version>6.2.14</Version>
+    </PackageReference>
+  </ItemGroup>
+
   <ItemGroup>
     <Compile Include="App.xaml.cs">
       <DependentUpon>App.xaml</DependentUpon>
@@ -49,6 +62,7 @@
       <DependentUpon>MainPage.xaml</DependentUpon>
     </Compile>
     <Compile Include="SaveBridgeServer.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
 
   <ItemGroup>
