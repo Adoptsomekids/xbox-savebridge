@@ -59,45 +59,41 @@ jobs:
           Get-ChildItem "SaveBridge\SaveBridge\bin\x64\Release" -Recurse -Filter "*.appx" |
             Select-Object FullName,Length | Format-Table
 
-      # The MSBuild UAP targets put the APPX in bin\x64\Release\AppPackages\
+      # The MSBuild UAP targets put the main APPX in AppPackages\SaveBridge_*_Test\
       - name: Locate APPX
         id: locate
         shell: powershell
         run: |
-          $appxSearch = @(
+          Write-Host "Searching for main APPX (SaveBridge*.appx, not dependencies)..."
+
+          # Look for the main package file (not dependency frameworks)
+          # The main package is named SaveBridge_<version>_<arch>[_Test].appx
+          $appxSearchDirs = @(
+            "SaveBridge\SaveBridge\AppPackages",
             "SaveBridge\SaveBridge\bin\x64\Release\AppPackages",
-            "SaveBridge\SaveBridge\bin\x64\Release",
-            "SaveBridge\SaveBridge\AppPackages"
+            "SaveBridge\SaveBridge\bin\x64\Release"
           )
 
           $appx = $null
-          foreach ($dir in $appxSearch) {
+          foreach ($dir in $appxSearchDirs) {
             if (Test-Path $dir) {
-              $appx = Get-ChildItem $dir -Recurse -Filter "*.appx" | Select-Object -First 1
-              if ($appx) { break }
+              Write-Host "Checking $dir ..."
+              Get-ChildItem $dir -Recurse -Filter "SaveBridge*.appx" | ForEach-Object {
+                Write-Host "  Candidate: $($_.FullName)"
+              }
+              # Exclude files inside a Dependencies sub-folder
+              $appx = Get-ChildItem $dir -Recurse -Filter "SaveBridge*.appx" |
+                Where-Object { $_.DirectoryName -notlike "*\Dependencies\*" } |
+                Select-Object -First 1
+              if ($appx) {
+                Write-Host "Selected: $($appx.FullName)"
+                break
+              }
             }
           }
 
           if (-not $appx) {
-            Write-Host "APPX not found via GenerateAppxPackageOnBuild, assembling manually..."
-
-            # Manual assembly fallback — copy layout and run MakeAppx
-            $layout = "appx_layout"
-            New-Item -ItemType Directory -Force -Path $layout | Out-Null
-
-            $binDir = "SaveBridge\SaveBridge\bin\x64\Release"
-            Copy-Item "$binDir\*" $layout -Recurse -Force -ErrorAction SilentlyContinue
-
-            # Manifest
-            $manifest = Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw
-            $manifest = $manifest -replace '\$targetnametoken\$', 'SaveBridge'
-            Set-Content "$layout\AppxManifest.xml" -Value $manifest -Encoding UTF8
-
-            # Assets
-            $assetSrc = "SaveBridge\SaveBridge\Assets"
-            New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
-            Copy-Item "$assetSrc\*" "$layout\Assets\" -Force
-
+            Write-Host "Main APPX not found in AppPackages, building manually with MakeAppx..."
             $makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
               -Recurse -Filter "makeappx.exe" |
               Where-Object { $_.FullName -like "*x64*" } |
@@ -105,13 +101,24 @@ jobs:
 
             if (-not $makeappx) { Write-Error "MakeAppx.exe not found"; exit 1 }
 
-            $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
-            & $makeappx pack /d $layout /p "$appxPath" /overwrite /nv
+            # Find the APPX staging layout that MSBuild created
+            $appxLayoutDir = Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory |
+              Where-Object { $_.Name -like "SaveBridge*" } |
+              Select-Object -First 1 -ExpandProperty FullName
+
+            if ($appxLayoutDir) {
+              Write-Host "Layout dir: $appxLayoutDir"
+              $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
+              & $makeappx pack /d "$appxLayoutDir" /p "$appxPath" /overwrite /nv
+            } else {
+              Write-Error "Could not find AppPackages layout directory"
+              exit 1
+            }
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             echo "appx_path=$appxPath" >> $env:GITHUB_OUTPUT
           } else {
             echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
-            Write-Host "Found APPX: $($appx.FullName)"
+            Write-Host "APPX path: $($appx.FullName)"
           }
 
       # Create self-signed cert (CN=Adoptsomekids matches Publisher in manifest)
