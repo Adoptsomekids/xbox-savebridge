@@ -1,17 +1,40 @@
-using Windows.ApplicationModel.Core;
+using System;
+using System.Threading.Tasks;
 
 namespace SaveBridge
 {
     /// <summary>
-    /// Entry point for the headless UWP app.
-    /// CoreApplication.Run() is the only XAML-free way to start a UWP process.
-    /// No App.xaml, no XAML compiler, no WMC type-universe pass needed.
+    /// Entry point for the packaged Win32 sideloaded UWP app.
+    ///
+    /// EntryPoint in Package.appxmanifest = "Windows.FullTrustApplication"
+    /// This means Windows launches SaveBridge.exe directly.
+    /// No CoreApplication/IFrameworkView wiring required.
     /// </summary>
     static class Program
     {
-        static void Main(string[] args)
+        [STAThread]
+        static async Task Main(string[] args)
         {
-            CoreApplication.Run(new SaveBridgeViewSource());
+            Console.WriteLine("[SaveBridge] Starting...");
+
+            var server = new SaveBridgeServer();
+
+            // Graceful shutdown on CTRL+C (if ever run from console)
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                server.Stop();
+            };
+
+            try
+            {
+                await server.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[SaveBridge] Fatal: " + ex);
+                Environment.Exit(1);
+            }
         }
     }
 }

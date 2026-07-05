@@ -3,8 +3,9 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:xbox="http://schemas.microsoft.com/appx/manifest/xbox/windows10"
-  IgnorableNamespaces="uap mp xbox">
+  IgnorableNamespaces="uap mp rescap xbox">
 
   <Identity
     Name="Adoptsomekids.SaveBridge"
@@ -22,7 +23,7 @@
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
 
   <Resources>
@@ -31,8 +32,8 @@
 
   <Applications>
     <Application Id="App"
-      Executable="$targetnametoken$.exe"
-      EntryPoint="SaveBridge.SaveBridgeViewSource">
+      Executable="SaveBridge.exe"
+      EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="SaveBridge"
         Square150x150Logo="Assets\Logo.png"
@@ -48,6 +49,7 @@
   <Capabilities>
     <Capability Name="internetClientServer" />
     <Capability Name="privateNetworkClientServer" />
+    <rescap:Capability Name="runFullTrust" />
     <xbox:Capability Name="connectedStorageAccess" />
   </Capabilities>
 

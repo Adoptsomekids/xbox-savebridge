@@ -1,14 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Target UWP on Windows 10/11 x64 -->
+    <!-- SDK-style packaged Win32 targeting UWP Windows.Xbox -->
     <TargetFramework>net6.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RuntimeIdentifiers>win10-x64</RuntimeIdentifiers>
 
-    <!-- UWP AppContainer output -->
+    <!-- WinExe so Main() is the real entry point -->
     <OutputType>WinExe</OutputType>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
 
@@ -18,11 +17,11 @@
     <ApplicationId>Adoptsomekids.SaveBridge</ApplicationId>
     <Version>1.0.0.0</Version>
 
-    <!-- Self-contained: bundle the .NET runtime inside the APPX -->
+    <!-- Self-contained: bundle the .NET runtime — no external framework deps needed on Xbox -->
     <SelfContained>true</SelfContained>
     <PublishSingleFile>false</PublishSingleFile>
 
-    <!-- Packaging -->
+    <!-- APPX packaging -->
     <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
     <AppxBundle>Always</AppxBundle>
@@ -30,18 +29,19 @@
     <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
     <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+    <AppxPackageDir>$(MSBuildProjectDirectory)\AppPackages\</AppxPackageDir>
 
-    <!-- Suppress warnings not relevant to UWP -->
+    <!-- Suppress NuGet target-framework compat warnings -->
     <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
 
-  <!-- Assets copied into the APPX layout -->
+  <!-- Assets copied into the APPX payload -->
   <ItemGroup>
-    <Content Include="Assets\StoreLogo.png"  PackagePath="Assets\StoreLogo.png" />
-    <Content Include="Assets\Logo.png"       PackagePath="Assets\Logo.png" />
-    <Content Include="Assets\SmallLogo.png"  PackagePath="Assets\SmallLogo.png" />
-    <Content Include="Assets\WideLogo.png"   PackagePath="Assets\WideLogo.png" />
-    <Content Include="Assets\Splash.png"     PackagePath="Assets\Splash.png" />
+    <Content Include="Assets\StoreLogo.png"  PackagePath="Assets\StoreLogo.png"  CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Logo.png"       PackagePath="Assets\Logo.png"       CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\SmallLogo.png"  PackagePath="Assets\SmallLogo.png"  CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\WideLogo.png"   PackagePath="Assets\WideLogo.png"   CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Splash.png"     PackagePath="Assets\Splash.png"     CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -18,3 +18,6 @@ BundleArtifacts/
 # NuGet
 packages/
 *.nupkg
+
+# Distribution zips (built locally / CI artifacts — do not commit large binaries)
+dist/
