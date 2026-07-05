@@ -125,11 +125,11 @@
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
 
   <!--
-    NUP .targets is intentionally NOT imported here.
-    The NUP .targets file performs a runtime validation that requires
-    project.json with "win10" in runtimes, which breaks the restore.
-    We only need the .props (which adds BCL facades to ReferencePath)
-    and the explicit <Reference> items injected by the workflow step.
+    Override the Microsoft.NuGet.targets validation target that fires at build
+    time and requires a project.json with "win10" RuntimeIdentifier.
+    We do not use project.json (we use packages.config) so this validation
+    is irrelevant.  Making it a no-op silences the NU-targets(389) error.
   -->
+  <Target Name="EnsureNuGetPackageConsistency" />
 
 </Project>
