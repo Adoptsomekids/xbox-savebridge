@@ -56,14 +56,14 @@ jobs:
 
           # Show everything produced
           Write-Host "=== All .appx files produced ==="
-          Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "*.appx" |
-            Select-Object FullName,Length | Format-Table
-
-          Write-Host "=== AppPackages folder ==="
+          Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "*.appx" | Select-Object FullName,Length | Format-Table
+          Write-Host "=== AppPackages layout ==="
           if (Test-Path "SaveBridge\SaveBridge\AppPackages") {
-            Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse |
-              Select-Object FullName,Length | Format-Table
+            Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse | Select-Object FullName,Length | Format-Table
           }
+          Write-Host "=== All XML/manifest files ==="
+          Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse -Filter "*.xml" | Select-Object FullName | Format-Table
+          Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse -Filter "AppxManifest*" | Select-Object FullName | Format-Table
 
       # Write pack script to disk to avoid YAML/PS brace parsing issues
       - name: Write pack script
@@ -80,18 +80,23 @@ jobs:
             Write-Host "Pre-built APPX: $($prebuilt.FullName)"
             Copy-Item $prebuilt.FullName $appxPath -Force
           } else {
-            Write-Host "No pre-built APPX, packing from layout..."
-            $layoutDir = (Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SaveBridge*" } | Select-Object -First 1).FullName
-            if (-not $layoutDir) {
-              Write-Host "Building layout from bin..."
-              $layoutDir = "$env:GITHUB_WORKSPACE\appx_layout"
-              New-Item -ItemType Directory -Force -Path $layoutDir | Out-Null
+            Write-Host "No pre-built APPX, assembling layout..."
+            $layoutDir = "$env:GITHUB_WORKSPACE\appx_layout"
+            New-Item -ItemType Directory -Force -Path $layoutDir | Out-Null
+            $testDir = (Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SaveBridge*" } | Select-Object -First 1).FullName
+            if ($testDir) {
+              Write-Host "Copying from AppPackages layout: $testDir"
+              Copy-Item "$testDir\*" $layoutDir -Recurse -Force
+            } else {
+              Write-Host "Copying from bin output..."
               Copy-Item "SaveBridge\SaveBridge\bin\x64\Release\*" $layoutDir -Recurse -Force -ErrorAction SilentlyContinue
-              $m = (Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw) -replace '\$targetnametoken\$','SaveBridge'
-              Set-Content "$layoutDir\AppxManifest.xml" $m -Encoding UTF8
               New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
               Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
             }
+            $m = (Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw) -replace '\$targetnametoken\$','SaveBridge'
+            Set-Content "$layoutDir\AppxManifest.xml" $m -Encoding UTF8
+            Write-Host "Layout contents (top-level):"
+            Get-ChildItem $layoutDir | Select-Object Name | Format-Table
             Write-Host "Packing: $layoutDir"
             & $makeappx pack /d "$layoutDir" /p "$appxPath" /overwrite /nv
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
