@@ -113,6 +113,12 @@ jobs:
           if (-not $msbuild) { $msbuild = "msbuild" }
           Write-Host "Using MSBuild: $msbuild"
 
+          # Pre-stage assets to the APPX layout directory before MakeAppx runs.
+          $layoutDir = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\bin\ARM64\Release"
+          New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
+          Write-Host "Pre-staged assets to $layoutDir\Assets\"
+
           & $msbuild "SaveBridge\SaveBridge.sln" `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
