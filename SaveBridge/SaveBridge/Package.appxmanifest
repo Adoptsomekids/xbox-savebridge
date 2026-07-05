@@ -36,12 +36,12 @@
       EntryPoint="SaveBridge.App">
       <uap:VisualElements
         DisplayName="SaveBridge"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png"
+        Square150x150Logo="Assets\Square150x150Logo.scale-200.png"
+        Square44x44Logo="Assets\Square44x44Logo.scale-200.png"
         Description="Xbox Save Bridge - Dead Island DE saves over local HTTP"
         BackgroundColor="#1a1a2e">
-        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"/>
-        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.scale-200.png"/>
+        <uap:SplashScreen Image="Assets\SplashScreen.scale-200.png" />
       </uap:VisualElements>
     </Application>
   </Applications>
