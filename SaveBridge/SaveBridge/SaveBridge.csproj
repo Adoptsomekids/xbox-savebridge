@@ -37,6 +37,14 @@
     <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <!-- Suppress .NETCore,Version=v5.0.AssemblyAttributes.cs generation -->
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <!--
+      Disable .NET Native compilation (UseDotNetNativeToolchain).
+      .NET Native is optional for sideloaded dev builds and its targets
+      require ARM (not ARM64) in the WireUpCoreRuntime task, which causes
+      MSB4044 when TargetArch is missing.  We build managed IL for devkit.
+    -->
+    <UseDotNetNativeToolchain>false</UseDotNetNativeToolchain>
+    <UseDotNetNativeSharedAssemblyFrameworkPackage>false</UseDotNetNativeSharedAssemblyFrameworkPackage>
 
     <!-- Packaging -->
     <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
@@ -130,11 +138,8 @@
     We do not use project.json (we use packages.config) so this validation
     is irrelevant.  Making it a no-op silences the NU-targets(389) error.
   -->
-  <!--
-    Override the InjectNetCoreFramework target from Microsoft.NuGet.targets.
-    This target (line 389) errors when there is no project.json with win10
-    runtime. We use packages.config not project.json, so skip entirely.
-  -->
+  <!-- Override targets that fail for ARM64 managed (non-.NET-Native) builds -->
   <Target Name="InjectNetCoreFramework" />
+  <Target Name="_WireUpCoreRuntime" />
 
 </Project>
