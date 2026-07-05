@@ -3,19 +3,6 @@
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
           Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
 
-  <!-- Import Microsoft.NETCore.UniversalWindowsPlatform props.
-       NuGetPackagesRoot is passed by CI workflow as GITHUB_WORKSPACE/packages.
-       This resolves WMC1006 by adding System.Runtime to the XAML compiler type universe.
-       Note: the props file is at build/ directly, NOT build/uap10.0/ -->
-  <Import Project="$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\Microsoft.NETCore.UniversalWindowsPlatform.props"
-          Condition="Exists('$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\Microsoft.NETCore.UniversalWindowsPlatform.props')" />
-
-  <!-- Explicitly add the System.Runtime.dll reference path for the XAML pre-compiler -->
-  <PropertyGroup
-    Condition="Exists('$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\ref\uap10.0.15138\System.Runtime.dll')">
-    <ReferencePath>$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\ref\uap10.0.15138</ReferencePath>
-  </PropertyGroup>
-
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">ARM64</Platform>
@@ -37,13 +24,8 @@
     <AppxBundle>Always</AppxBundle>
     <AppxBundlePlatforms>ARM64</AppxBundlePlatforms>
     <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
-    <!-- Suppress auto-generated AssemblyInfo to avoid duplicates -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <!-- C# 8 required for 'using var' syntax -->
     <LangVersion>8.0</LangVersion>
-    <!-- Required by Microsoft.NETCore.UniversalWindowsPlatform NuGet package -->
-    <RuntimeIdentifier>win10-arm64</RuntimeIdentifier>
-    <RuntimeIdentifiers>win10-arm64</RuntimeIdentifiers>
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
   </PropertyGroup>
@@ -107,8 +89,6 @@
 
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
 
-  <!-- Import Microsoft.NETCore.UniversalWindowsPlatform targets (after the XAML targets).
-       Note: the targets file is at build/ directly -->
-  <Import Project="$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\Microsoft.NetCore.UniversalWindowsPlatform.targets"
-          Condition="Exists('$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\Microsoft.NetCore.UniversalWindowsPlatform.targets')" />
+  <!-- ReferencePath items for BCL assemblies (System.Runtime etc.) are injected
+       by the CI workflow at build time from the NUP package. See build.yml. -->
 </Project>

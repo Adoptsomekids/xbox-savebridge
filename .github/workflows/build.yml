@@ -103,6 +103,35 @@ jobs:
           Get-ChildItem $pkgDir -Recurse -Filter "System.Runtime.dll" |
             ForEach-Object { Write-Host "System.Runtime.dll: $($_.FullName)" }
 
+      - name: Inject System.Runtime reference into project
+        shell: powershell
+        run: |
+          # The XAML compiler type universe needs System.Runtime.dll as a ReferencePath item.
+          # We inject it as an unconditional ItemGroup into the .csproj at build time,
+          # using the known absolute path from the downloaded NUP package.
+          $pkgDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
+          $sysRuntimeDll = "$pkgDir\ref\uap10.0.15138\System.Runtime.dll"
+
+          if (-not (Test-Path $sysRuntimeDll)) {
+            Write-Host "System.Runtime.dll not found at expected path: $sysRuntimeDll"
+            exit 1
+          }
+          Write-Host "System.Runtime.dll confirmed at: $sysRuntimeDll"
+
+          $csproj = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\SaveBridge.csproj"
+          $content = Get-Content $csproj -Raw
+
+          # Build the injection block — an ItemGroup with ReferencePath items for all BCL dlls
+          $refDir = "$pkgDir\ref\uap10.0.15138"
+          $dlls = Get-ChildItem $refDir -Filter "*.dll" | ForEach-Object { $_.FullName }
+          $items = ($dlls | ForEach-Object { "    <ReferencePath Include=`"$_`" />" }) -join "`n"
+          $injection = "<ItemGroup>`n$items`n  </ItemGroup>"
+
+          # Inject before the closing </Project> tag
+          $patched = $content -replace '</Project>', "  $injection`n</Project>"
+          Set-Content $csproj $patched -Encoding UTF8
+          Write-Host "Injected $($dlls.Count) ReferencePath items into SaveBridge.csproj"
+
       - name: Build APPX (ARM64)
         shell: powershell
         run: |
@@ -112,9 +141,6 @@ jobs:
           if (-not $msbuild) { $msbuild = "msbuild" }
           Write-Host "Using MSBuild: $msbuild"
 
-          # Point MSBuild at the NuGet packages folder so the .csproj import resolves
-          $pkgDir = "$env:GITHUB_WORKSPACE\packages"
-
           & $msbuild SaveBridge/SaveBridge.sln `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
@@ -123,7 +149,6 @@ jobs:
             /p:AppxPackageSigningEnabled=false `
             /p:UapAppxPackageBuildMode=SideloadOnly `
             /p:GenerateAppInstallerFile=false `
-            /p:NuGetPackagesRoot="$pkgDir" `
             /t:Build `
             /m `
             /v:normal
