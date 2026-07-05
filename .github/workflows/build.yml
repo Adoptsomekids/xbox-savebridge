@@ -65,63 +65,47 @@ jobs:
               Select-Object FullName,Length | Format-Table
           }
 
-      # Pack APPX from the layout folder that MSBuild created
+      # Pack APPX: MSBuild produces an AppPackages layout folder; we use MakeAppx to pack it
       - name: Pack and Locate APPX
         id: locate
         shell: powershell
         run: |
-          $makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
-            -Recurse -Filter "makeappx.exe" |
-            Where-Object { $_.FullName -like "*x64*" } |
-            Select-Object -First 1 -ExpandProperty FullName
-
-          if (-not $makeappx) { Write-Error "MakeAppx.exe not found"; exit 1 }
+          $ErrorActionPreference = "Stop"
+          $makeappx = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "makeappx.exe" | Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1).FullName
+          if (-not $makeappx) { throw "MakeAppx.exe not found" }
           Write-Host "MakeAppx: $makeappx"
 
-          # First try: look for a ready-made .appx from GenerateAppxPackageOnBuild
-          $appx = Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "SaveBridge*.appx" |
+          $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
+
+          # MSBuild GenerateAppxPackageOnBuild creates AppPackages\SaveBridge_*_Test\ layout folder
+          # Try to find a pre-built .appx first (some MSBuild configs produce it automatically)
+          $prebuilt = Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "SaveBridge*.appx" -ErrorAction SilentlyContinue |
             Where-Object { $_.DirectoryName -notlike "*\Dependencies\*" } |
             Select-Object -First 1
-
-          if ($appx) {
-            Write-Host "Found pre-built APPX: $($appx.FullName)"
-            $appxPath = $appx.FullName
-          } else {
-            Write-Host "No pre-built APPX found — packing from AppPackages layout..."
-
-            # MSBuild puts the exploded layout in AppPackages\SaveBridge_*_Test\
-            # That folder contains AppxManifest.xml + binaries + assets
-            $layoutDir = Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -like "SaveBridge*" } |
-              Select-Object -First 1 -ExpandProperty FullName
-
+          if ($prebuilt) {
+            Write-Host "Pre-built APPX found: $($prebuilt.FullName)"
+            Copy-Item $prebuilt.FullName $appxPath -Force
+          }
+          else {
+            Write-Host "No pre-built APPX — packing from AppPackages layout folder..."
+            $layoutDir = (Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SaveBridge*" } | Select-Object -First 1).FullName
             if (-not $layoutDir) {
-              # Last resort: build the layout ourselves from bin output
-              Write-Host "No AppPackages layout — assembling from bin output..."
+              Write-Host "AppPackages folder missing — assembling layout from bin output"
               $layoutDir = "$env:GITHUB_WORKSPACE\appx_layout"
               New-Item -ItemType Directory -Force -Path $layoutDir | Out-Null
-
               $binDir = "SaveBridge\SaveBridge\bin\x64\Release"
               Copy-Item "$binDir\*" $layoutDir -Recurse -Force -ErrorAction SilentlyContinue
-
-              $manifest = Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw
-              $manifest = $manifest -replace '\$targetnametoken\$', 'SaveBridge'
-              Set-Content "$layoutDir\AppxManifest.xml" -Value $manifest -Encoding UTF8
-
+              $manifest = (Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw) -replace '\$targetnametoken\$', 'SaveBridge'
+              Set-Content "$layoutDir\AppxManifest.xml" $manifest -Encoding UTF8
               New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
               Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
             }
-
-            Write-Host "Packing from: $layoutDir"
-            Write-Host "Contents:"
-            Get-ChildItem $layoutDir | Select-Object Name | Format-Table
-
-            $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
+            Write-Host "Packing from layout: $layoutDir"
             & $makeappx pack /d "$layoutDir" /p "$appxPath" /overwrite /nv
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
-          Write-Host "Final APPX: $appxPath ($($(Get-Item $appxPath).Length) bytes)"
+          Write-Host "APPX: $appxPath ($((Get-Item $appxPath).Length) bytes)"
           echo "appx_path=$appxPath" >> $env:GITHUB_OUTPUT
 
       # Create self-signed cert (CN=Adoptsomekids matches Publisher in manifest)
