@@ -80,23 +80,24 @@ jobs:
             Write-Host "Pre-built APPX: $($prebuilt.FullName)"
             Copy-Item $prebuilt.FullName $appxPath -Force
           } else {
-            Write-Host "No pre-built APPX, assembling layout..."
+            Write-Host "No pre-built APPX, assembling layout from _Test + assets..."
             $layoutDir = "$env:GITHUB_WORKSPACE\appx_layout"
             New-Item -ItemType Directory -Force -Path $layoutDir | Out-Null
             $testDir = (Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SaveBridge*" } | Select-Object -First 1).FullName
             if ($testDir) {
-              Write-Host "Copying from AppPackages layout: $testDir"
+              Write-Host "Copying binaries from AppPackages layout: $testDir"
               Copy-Item "$testDir\*" $layoutDir -Recurse -Force
             } else {
               Write-Host "Copying from bin output..."
               Copy-Item "SaveBridge\SaveBridge\bin\x64\Release\*" $layoutDir -Recurse -Force -ErrorAction SilentlyContinue
-              New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
-              Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
             }
+            New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
+            Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
             $m = (Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw) -replace '\$targetnametoken\$','SaveBridge'
             Set-Content "$layoutDir\AppxManifest.xml" $m -Encoding UTF8
-            Write-Host "Layout contents (top-level):"
+            Write-Host "Layout contents:"
             Get-ChildItem $layoutDir | Select-Object Name | Format-Table
+            Get-ChildItem "$layoutDir\Assets" | Select-Object Name | Format-Table
             Write-Host "Packing: $layoutDir"
             & $makeappx pack /d "$layoutDir" /p "$appxPath" /overwrite /nv
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
