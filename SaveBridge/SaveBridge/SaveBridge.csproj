@@ -1,154 +1,47 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!--
-  SaveBridge.csproj — XAML-free UWP AppContainerExe
-  ==================================================
-  Strategy:
-    - NuGet restores Microsoft.NETCore.UniversalWindowsPlatform (NUP) 6.2.9
-      which brings in the BCL facade DLLs (System.Runtime, mscorlib, etc.)
-      that the XAML CSharp.targets need for type-universe resolution.
-    - Import Microsoft.Windows.UI.Xaml.CSharp.targets for UAP/AppX packaging.
-    - No .xaml files, no <Page> items — WMC XAML compiler has nothing to process.
-    - Entry point: SaveBridge.SaveBridgeViewSource (IFrameworkViewSource) with
-      headless IFrameworkView that runs the HTTP save-bridge server.
--->
-<Project ToolsVersion="15.0" DefaultTargets="Build"
-         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project Sdk="Microsoft.NET.Sdk">
 
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
-          Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-
-  <!-- ── Core properties ─────────────────────────────────────────────── -->
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
-    <Platform      Condition=" '$(Platform)'      == '' ">x64</Platform>
-    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
-    <OutputType>AppContainerExe</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>SaveBridge</RootNamespace>
-    <AssemblyName>SaveBridge</AssemblyName>
-    <DefaultLanguage>en-US</DefaultLanguage>
-
-    <!-- UAP target platform -->
-    <TargetPlatformIdentifier>UAP</TargetPlatformIdentifier>
-    <TargetPlatformVersion>10.0.19041.0</TargetPlatformVersion>
+    <!-- Target UWP on Windows 10/11 x64 -->
+    <TargetFramework>net6.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
-    <MinimumVisualStudioVersion>16</MinimumVisualStudioVersion>
-    <!-- UAP project type GUIDs — prevent .NET SDK from hijacking the build -->
-    <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
-    <!-- Suppress .NETCore,Version=v5.0.AssemblyAttributes.cs generation -->
-    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
-    <!--
-      Disable .NET Native compilation (UseDotNetNativeToolchain).
-      .NET Native is optional for sideloaded dev builds and its targets
-      require ARM (not x64) in the WireUpCoreRuntime task, which causes
-      MSB4044 when TargetArch is missing.  We build managed IL for devkit.
-    -->
-    <UseDotNetNativeToolchain>false</UseDotNetNativeToolchain>
-    <UseDotNetNativeSharedAssemblyFrameworkPackage>false</UseDotNetNativeSharedAssemblyFrameworkPackage>
+    <RuntimeIdentifiers>win10-x64</RuntimeIdentifiers>
+
+    <!-- UWP AppContainer output -->
+    <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- Package identity -->
+    <AssemblyName>SaveBridge</AssemblyName>
+    <RootNamespace>SaveBridge</RootNamespace>
+    <ApplicationId>Adoptsomekids.SaveBridge</ApplicationId>
+    <Version>1.0.0.0</Version>
+
+    <!-- Self-contained: bundle the .NET runtime inside the APPX -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
 
     <!-- Packaging -->
-    <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
-    <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
-    <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
+    <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
     <AppxBundle>Always</AppxBundle>
     <AppxBundlePlatforms>x64</AppxBundlePlatforms>
     <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
 
-    <!-- AssemblyInfo.cs provides all assembly attributes -->
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <NuGetPackageImportStamp></NuGetPackageImportStamp>
-    <!--
-      Suppress the Microsoft.NuGet.targets RuntimeIdentifier validation.
-      This check (line 389) requires a project.json with "win10" runtime
-      when NUP is a dependency. We supply BCL DLLs via explicit <Reference>
-      items injected by the workflow, so the runtime check is not needed.
-    -->
-    <RestoreProjectStyle>PackagesConfig</RestoreProjectStyle>
-    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <!-- Suppress warnings not relevant to UWP -->
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
 
-  <!-- ── Release config ─────────────────────────────────────────────── -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
-    <OutputPath>bin\x64\Release\</OutputPath>
-    <DefineConstants>TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
-    <Optimize>true</Optimize>
-    <DebugType>pdbonly</DebugType>
-  </PropertyGroup>
-
-  <!-- ── Debug config ───────────────────────────────────────────────── -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
-    <DebugSymbols>true</DebugSymbols>
-    <OutputPath>bin\x64\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-  </PropertyGroup>
-
-  <!-- ── Source files ───────────────────────────────────────────────── -->
+  <!-- Assets copied into the APPX layout -->
   <ItemGroup>
-    <Compile Include="Program.cs" />
-    <Compile Include="SaveBridgeView.cs" />
-    <Compile Include="SaveBridgeServer.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Content Include="Assets\StoreLogo.png"  PackagePath="Assets\StoreLogo.png" />
+    <Content Include="Assets\Logo.png"       PackagePath="Assets\Logo.png" />
+    <Content Include="Assets\SmallLogo.png"  PackagePath="Assets\SmallLogo.png" />
+    <Content Include="Assets\WideLogo.png"   PackagePath="Assets\WideLogo.png" />
+    <Content Include="Assets\Splash.png"     PackagePath="Assets\Splash.png" />
   </ItemGroup>
-
-  <!-- ── Package manifest ───────────────────────────────────────────── -->
-  <ItemGroup>
-    <AppxManifest Include="Package.appxmanifest">
-      <SubType>Designer</SubType>
-    </AppxManifest>
-  </ItemGroup>
-
-  <!-- ── Assets ─────────────────────────────────────────────────────── -->
-  <!-- Simple unqualified names avoid APPX0703 resource-qualifier issues -->
-  <ItemGroup>
-    <Content Include="Assets\StoreLogo.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Assets\Logo.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Assets\SmallLogo.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Assets\WideLogo.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Assets\Splash.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
-  <!--
-    NuGet package import — Microsoft.NETCore.UniversalWindowsPlatform
-    This .props file adds System.Runtime and all other BCL facades to the
-    compiler reference path (ReferencePath), which is what the XAML targets'
-    WMC type-universe pass needs to resolve System.Runtime, Version=4.0.0.0.
-    NuGet restores this to $(SolutionDir)\packages\ via packages.config.
-  -->
-  <Import Project="$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.props"
-          Condition="Exists('$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.props')" />
-
-  <!--
-    Import UAP/XAML C# targets last (as is standard for UAP projects).
-    Provides: UWP BCL assembly wiring, AppX packaging pipeline (MakeAppx).
-    WMC XAML compiler pass runs but finds no <Page> items — it is a no-op.
-    The type-universe check is satisfied by the NUP BCL facades above.
-  -->
-  <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '15.0' ">
-    <VisualStudioVersion>15.0</VisualStudioVersion>
-  </PropertyGroup>
-
-  <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
-
-  <!--
-    Override the Microsoft.NuGet.targets validation target that fires at build
-    time and requires a project.json with "win10" RuntimeIdentifier.
-    We do not use project.json (we use packages.config) so this validation
-    is irrelevant.  Making it a no-op silences the NU-targets(389) error.
-  -->
-  <!-- Override targets that fail for x64 managed (non-.NET-Native) builds -->
-  <Target Name="InjectNetCoreFramework" />
-  <Target Name="_WireUpCoreRuntime" />
 
 </Project>
