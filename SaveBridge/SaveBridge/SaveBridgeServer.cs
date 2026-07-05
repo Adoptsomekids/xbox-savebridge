@@ -330,16 +330,10 @@ namespace SaveBridge
         {
             try
             {
-                var appData = Windows.Storage.ApplicationData.Current;
-                var localFolder = appData.LocalFolder;
-
-                // Traverse SystemAppData\wgs (accessible from within our own package)
-                var wgsFolder = await localFolder.GetParentAsync()
-                    .ContinueWith(t => t.Result) as Windows.Storage.StorageFolder;
-
-                // Try direct path relative to our package LocalState
-                string wgsPath = Path.Combine(localFolder.Path, "..", "SystemAppData", "wgs");
-                wgsPath = Path.GetFullPath(wgsPath);
+                // LocalFolder is at: ...\Packages\<PFN>\LocalState
+                // WGS is at:         ...\Packages\<PFN>\SystemAppData\wgs
+                var localFolder = Windows.Storage.ApplicationData.Current.LocalFolder;
+                string wgsPath = Path.GetFullPath(Path.Combine(localFolder.Path, "..", "SystemAppData", "wgs"));
 
                 var result = await WgsReader.EnumerateAsync(wgsPath);
                 await SendJson(outStream, 200, result);
