@@ -1,10 +1,10 @@
-name: Build APPX (Legacy UAP)
+name: Build APPX (JavaScript UWP)
 
 on:
   push:
     branches: [ main ]
     paths:
-      - 'SaveBridge/**'
+      - 'SaveBridgeJS/**'
       - '.github/workflows/build.yml'
   pull_request:
     branches: [ main ]
@@ -20,56 +20,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # MSBuild is required for legacy UAP projects (ToolsVersion=15.0, WindowsXaml targets)
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      # NuGet restore — legacy UAP uses packages.config-style PackageReference restore
-      - name: Setup NuGet
-        uses: NuGet/setup-nuget@v2
-
-      - name: NuGet Restore
+      # JavaScript UWP — no MSBuild, no .NET, no NuGet needed.
+      # Just pack the SaveBridgeJS folder directly with MakeAppx.
+      - name: Find MakeAppx
+        id: makeappx
         shell: powershell
         run: |
-          nuget restore "SaveBridge\SaveBridge.sln" -Verbosity quiet
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "nuget restore failed, trying msbuild /t:Restore..."
-            msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" /t:Restore /p:Configuration=Release /p:Platform=x64 /v:minimal
-          }
+          $path = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "makeappx.exe" `
+            | Where-Object { $_.FullName -like "*x64*" } `
+            | Select-Object -First 1).FullName
+          if (-not $path) { throw "MakeAppx.exe not found" }
+          Write-Host "MakeAppx: $path"
+          echo "path=$path" >> $env:GITHUB_OUTPUT
 
-      # Build with MSBuild targeting Debug|x64
-      # Using Debug avoids the .NET Native Toolchain (UseDotNetNativeToolchain=true only in Release).
-      # Debug builds ship IL that the on-device Xbox runtime executes — no AOT mismatch.
-      - name: Build with MSBuild
+      - name: Pack JavaScript UWP APPX
         shell: powershell
         run: |
-          msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" `
-            /p:Configuration=Debug `
-            /p:Platform=x64 `
-            /p:AppxPackageSigningEnabled=false `
-            /p:GenerateAppxPackageOnBuild=true `
-            /p:AppxBundle=Never `
-            /p:UapAppxPackageBuildMode=SideloadOnly `
-            /v:minimal `
-            /m
+          $makeappx = "${{ steps.makeappx.outputs.path }}"
+          $src      = "$env:GITHUB_WORKSPACE\SaveBridgeJS"
+          $out      = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_neutral.appx"
 
+          Write-Host "Source: $src"
+          Write-Host "Output: $out"
+          Write-Host "Contents:"
+          Get-ChildItem $src -Recurse | Select-Object FullName | Format-Table
+
+          & $makeappx pack /d "$src" /p "$out" /overwrite /nv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          # Show everything produced
-          Write-Host "=== All .appx files produced ==="
-          Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "*.appx" | Select-Object FullName,Length | Format-Table
-          Write-Host "=== AppPackages layout ==="
-          if (Test-Path "SaveBridge\SaveBridge\AppPackages") {
-            Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse | Select-Object FullName,Length | Format-Table
-          }
+          $size = (Get-Item $out).Length
+          Write-Host "APPX packed: $out ($size bytes)"
+          echo "appx_path=$out" >> $env:GITHUB_OUTPUT
+        id: pack
 
-      # Pack APPX using the committed script (avoids YAML/PS escaping issues)
-      - name: Pack and Locate APPX
-        id: locate
-        shell: powershell
-        run: powershell -ExecutionPolicy Bypass -File ".github\pack-appx.ps1"
-
-      # Create self-signed cert (CN=Adoptsomekids matches Publisher in manifest)
       - name: Create signing certificate
         id: cert
         shell: powershell
@@ -100,13 +83,9 @@ jobs:
             Where-Object { $_.FullName -like "*x64*" } |
             Select-Object -First 1 -ExpandProperty FullName
 
-          Write-Host "signtool: $signtool"
-          Write-Host "APPX: ${{ steps.locate.outputs.appx_path }}"
-
           & $signtool sign /fd SHA256 /sha1 "${{ steps.cert.outputs.thumbprint }}" `
-            "${{ steps.locate.outputs.appx_path }}"
-
-          if ($LASTEXITCODE -ne 0) { Write-Error "signtool failed"; exit $LASTEXITCODE }
+            "${{ steps.pack.outputs.appx_path }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Signed OK"
 
       - name: Upload APPX artifact
@@ -114,7 +93,7 @@ jobs:
         with:
           name: SaveBridge-APPX
           path: |
-            ${{ steps.locate.outputs.appx_path }}
+            ${{ steps.pack.outputs.appx_path }}
             ${{ steps.cert.outputs.cer_path }}
           retention-days: 30
           if-no-files-found: error
@@ -124,7 +103,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.locate.outputs.appx_path }}
+            ${{ steps.pack.outputs.appx_path }}
             ${{ steps.cert.outputs.cer_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

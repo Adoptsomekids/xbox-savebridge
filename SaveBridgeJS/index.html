@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SaveBridge</title>
+  <style>
+    body { background: #1a1a2e; color: #e0e0e0; font-family: Segoe UI, sans-serif;
+           margin: 0; padding: 20px; font-size: 14px; }
+    h1   { color: #4fc3f7; margin: 0 0 4px; font-size: 22px; }
+    p    { color: #90a4ae; margin: 0 0 16px; font-size: 12px; }
+    .row { display: flex; gap: 12px; margin-bottom: 12px; }
+    button { padding: 10px 22px; border: none; border-radius: 4px; cursor: pointer;
+             font-size: 13px; font-weight: 600; }
+    #btnStart { background: #4fc3f7; color: #000; }
+    #btnStop  { background: #555; color: #ccc; }
+    #status   { color: #81c784; font-size: 13px; margin-bottom: 8px; }
+    #addr     { color: #4fc3f7; font-family: Consolas, monospace; font-size: 12px;
+                margin-bottom: 12px; }
+    #log      { background: #0d0d1a; border: 1px solid #333; padding: 10px;
+                height: 340px; overflow-y: auto; font-family: Consolas, monospace;
+                font-size: 11px; white-space: pre-wrap; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h1>SaveBridge</h1>
+  <p>Dead Island DE — Xbox WGS Save Bridge</p>
+  <div class="row">
+    <button id="btnStart" onclick="startServer()">Start Server</button>
+    <button id="btnStop"  onclick="stopServer()" disabled>Stop Server</button>
+  </div>
+  <div id="status">Status: Stopped</div>
+  <div id="addr"></div>
+  <div id="log"></div>
+  <script src="js/server.js"></script>
+</body>
+</html>
