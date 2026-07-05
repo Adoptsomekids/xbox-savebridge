@@ -37,13 +37,14 @@ jobs:
             msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" /t:Restore /p:Configuration=Release /p:Platform=x64 /v:minimal
           }
 
-      # Build with MSBuild targeting Release|x64
-      # GenerateAppxPackageOnBuild=true tells the UAP targets to produce the APPX layout + pack
+      # Build with MSBuild targeting Debug|x64
+      # Using Debug avoids the .NET Native Toolchain (UseDotNetNativeToolchain=true only in Release).
+      # Debug builds ship IL that the on-device Xbox runtime executes — no AOT mismatch.
       - name: Build with MSBuild
         shell: powershell
         run: |
           msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" `
-            /p:Configuration=Release `
+            /p:Configuration=Debug `
             /p:Platform=x64 `
             /p:AppxPackageSigningEnabled=false `
             /p:GenerateAppxPackageOnBuild=true `
@@ -61,9 +62,6 @@ jobs:
           if (Test-Path "SaveBridge\SaveBridge\AppPackages") {
             Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse | Select-Object FullName,Length | Format-Table
           }
-          Write-Host "=== All XML/manifest files ==="
-          Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse -Filter "*.xml" | Select-Object FullName | Format-Table
-          Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse -Filter "AppxManifest*" | Select-Object FullName | Format-Table
 
       # Pack APPX using the committed script (avoids YAML/PS escaping issues)
       - name: Pack and Locate APPX

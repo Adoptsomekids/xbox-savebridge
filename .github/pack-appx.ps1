@@ -8,7 +8,7 @@ $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
 
 # First: look for a pre-built .appx produced by GenerateAppxPackageOnBuild
 $prebuilt = Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "SaveBridge*.appx" -ErrorAction SilentlyContinue `
-  | Where-Object { $_.DirectoryName -notlike "*\Dependencies\*" -and $_.DirectoryName -notlike "*_Test*" } `
+  | Where-Object { $_.DirectoryName -notlike "*\Dependencies\*" } `
   | Select-Object -First 1
 
 if ($prebuilt) {
@@ -35,7 +35,9 @@ if ($prebuilt) {
             Write-Host "No inner APPX. Assembling layout from bin + assets..."
             $layoutDir = "$env:GITHUB_WORKSPACE\appx_layout"
             New-Item -ItemType Directory -Force -Path $layoutDir | Out-Null
-            $binDir = "SaveBridge\SaveBridge\bin\x64\Release"
+            # Debug build output path
+            $binDir = "SaveBridge\SaveBridge\bin\x64\Debug"
+            if (-not (Test-Path $binDir)) { $binDir = "SaveBridge\SaveBridge\bin\x64\Release" }
             Copy-Item "$binDir\*" $layoutDir -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
             Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
