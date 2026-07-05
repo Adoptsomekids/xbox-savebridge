@@ -122,9 +122,17 @@ jobs:
           $csproj = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\SaveBridge.csproj"
           $content = Get-Content $csproj -Raw
 
-          # Inject ONLY System.Runtime.dll as a ReferencePath item
-          $item = "    <ReferencePath Include=`"$sysRuntimeDll`" />"
-          $injection = "<ItemGroup>`n$item`n  </ItemGroup>"
+          # Inject the two assemblies the XAML type universe needs:
+          #   System.Runtime.dll           -> fixes WMC1006
+          #   System.Runtime.WindowsRuntime.UI.Xaml.dll -> fixes WMC0003
+          $refDir = "$pkgDir\ref\uap10.0.15138"
+          $xamlDll = "$refDir\System.Runtime.WindowsRuntime.UI.Xaml.dll"
+          $items  = "    <ReferencePath Include=`"$sysRuntimeDll`" />"
+          if (Test-Path $xamlDll) {
+            $items += "`n    <ReferencePath Include=`"$xamlDll`" />"
+            Write-Host "Also injecting: $xamlDll"
+          }
+          $injection = "<ItemGroup>`n$items`n  </ItemGroup>"
 
           $patched = $content -replace '</Project>', "  $injection`n</Project>"
           Set-Content $csproj $patched -Encoding UTF8
