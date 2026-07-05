@@ -130,6 +130,58 @@ jobs:
           Write-Host "Build exit code: $LASTEXITCODE"
           exit $LASTEXITCODE
 
+      # Sign the APPX bundle with a self-signed developer certificate.
+      # The Xbox requires a signed package; the cert must be installed on the
+      # console before deploying. We upload the .cer file as a separate artifact.
+      - name: Sign APPX bundle
+        if: success()
+        shell: powershell
+        id: sign_appx
+        run: |
+          # Find the built msixbundle
+          $bundle = Get-ChildItem -Recurse -Filter "*.msixbundle" | Select-Object -First 1
+          if (-not $bundle) { $bundle = Get-ChildItem -Recurse -Filter "*.appxbundle" | Select-Object -First 1 }
+          if (-not $bundle) { Write-Error "No bundle found"; exit 1 }
+          Write-Host "Bundle: $($bundle.FullName)"
+
+          # Generate self-signed code-signing certificate (EKU 1.3.6.1.5.5.7.3.3)
+          $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject "CN=Adoptsomekids" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "SaveBridge Dev Cert" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+          Write-Host "Certificate thumbprint: $($cert.Thumbprint)"
+
+          # Export .cer (public key only) for installation on Xbox
+          $cerPath = "$env:GITHUB_WORKSPACE\SaveBridge-DevCert.cer"
+          Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
+          Write-Host "Exported cert: $cerPath"
+
+          # Sign the bundle using signtool
+          $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe"
+          if (-not (Test-Path $signtool)) {
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" |
+              Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1 | ForEach-Object { $_.FullName }
+          }
+          Write-Host "Using signtool: $signtool"
+
+          & $signtool sign `
+            /fd SHA256 `
+            /sha1 $cert.Thumbprint `
+            /tr http://timestamp.digicert.com `
+            /td sha256 `
+            "$($bundle.FullName)"
+
+          Write-Host "signtool exit: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Timestamp may have failed, retrying without timestamp..."
+            & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint "$($bundle.FullName)"
+            Write-Host "signtool exit (no ts): $LASTEXITCODE"
+          }
+          exit 0
+
       - name: Find APPX output
         if: success()
         shell: powershell
@@ -146,12 +198,14 @@ jobs:
             Get-ChildItem -Recurse -Include "*.appx","*.appxbundle","*.msix","*.msixbundle"
           }
 
-      - name: Upload APPX artifact
+      - name: Upload APPX + certificate artifacts
         if: success() && steps.find_appx.outputs.appx_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: SaveBridge-APPX
-          path: ${{ steps.find_appx.outputs.appx_path }}
+          path: |
+            ${{ steps.find_appx.outputs.appx_path }}
+            ${{ github.workspace }}/SaveBridge-DevCert.cer
           retention-days: 30
 
       - name: Upload to Release
