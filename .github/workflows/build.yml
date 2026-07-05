@@ -74,9 +74,9 @@ jobs:
           $bundle = Get-ChildItem -Recurse -Filter "*.msixbundle" | Select-Object -First 1
           if (-not $bundle) { $bundle = Get-ChildItem -Recurse -Filter "*.appxbundle" | Select-Object -First 1 }
           if (-not $bundle) {
-            Write-Host "No bundle found — listing APPX output:"
+            Write-Host "No bundle found - listing APPX output:"
             Get-ChildItem -Recurse -Include "*.appx","*.msix"
-            exit 0          # soft fail: still upload whatever we have
+            exit 0
           }
           Write-Host "Bundle to sign: $($bundle.FullName)"
 
@@ -103,7 +103,7 @@ jobs:
           & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint "$($bundle.FullName)"
           $exitCode = $LASTEXITCODE
 
-          # Timestamp is optional — ignore failure
+          # Timestamp is optional - ignore failure
           if ($exitCode -ne 0) {
             Write-Host "Sign failed with $exitCode"
             exit $exitCode
