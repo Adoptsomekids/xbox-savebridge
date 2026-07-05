@@ -130,6 +130,11 @@
     We do not use project.json (we use packages.config) so this validation
     is irrelevant.  Making it a no-op silences the NU-targets(389) error.
   -->
-  <Target Name="EnsureNuGetPackageConsistency" />
+  <!--
+    Override the InjectNetCoreFramework target from Microsoft.NuGet.targets.
+    This target (line 389) errors when there is no project.json with win10
+    runtime. We use packages.config not project.json, so skip entirely.
+  -->
+  <Target Name="InjectNetCoreFramework" />
 
 </Project>
