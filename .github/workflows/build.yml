@@ -65,53 +65,11 @@ jobs:
           Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse -Filter "*.xml" | Select-Object FullName | Format-Table
           Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Recurse -Filter "AppxManifest*" | Select-Object FullName | Format-Table
 
-      # Write pack script to disk to avoid YAML/PS brace parsing issues
-      - name: Write pack script
-        shell: powershell
-        run: |
-          $script = @'
-          $ErrorActionPreference = "Stop"
-          $makeappx = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "makeappx.exe" | Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1).FullName
-          if (-not $makeappx) { throw "MakeAppx.exe not found" }
-          Write-Host "MakeAppx: $makeappx"
-          $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
-          $prebuilt = Get-ChildItem "SaveBridge\SaveBridge" -Recurse -Filter "SaveBridge*.appx" -ErrorAction SilentlyContinue | Where-Object { $_.DirectoryName -notlike "*\Dependencies\*" } | Select-Object -First 1
-          if ($prebuilt) {
-            Write-Host "Pre-built APPX: $($prebuilt.FullName)"
-            Copy-Item $prebuilt.FullName $appxPath -Force
-          } else {
-            Write-Host "Searching for inner APPX inside _Test bundle..."
-            $testDir = (Get-ChildItem "SaveBridge\SaveBridge\AppPackages" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SaveBridge*" } | Select-Object -First 1).FullName
-            if ($testDir) {
-              $innerAppx = Get-ChildItem $testDir -Filter "SaveBridge*.appx" -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($innerAppx) {
-                Write-Host "Inner APPX found: $($innerAppx.FullName)"
-                Copy-Item $innerAppx.FullName $appxPath -Force
-              } else {
-                Write-Host "No inner APPX in _Test — packing layout from bin..."
-                $layoutDir = "$env:GITHUB_WORKSPACE\appx_layout"
-                New-Item -ItemType Directory -Force -Path $layoutDir | Out-Null
-                Copy-Item "SaveBridge\SaveBridge\bin\x64\Release\*" $layoutDir -Recurse -Force -ErrorAction SilentlyContinue
-                New-Item -ItemType Directory -Force -Path "$layoutDir\Assets" | Out-Null
-                Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layoutDir\Assets\" -Force
-                $m = (Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw) -replace '\$targetnametoken\$','SaveBridge'
-                Set-Content "$layoutDir\AppxManifest.xml" $m -Encoding UTF8
-                & $makeappx pack /d "$layoutDir" /p "$appxPath" /overwrite /nv
-                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              }
-            } else {
-              throw "AppPackages directory not found"
-            }
-          }
-          Write-Host "Done: $appxPath ($((Get-Item $appxPath).Length) bytes)"
-          "appx_path=$appxPath" | Out-File $env:GITHUB_OUTPUT -Append
-          '@
-          $script | Set-Content "$env:GITHUB_WORKSPACE\pack-appx.ps1" -Encoding UTF8
-
+      # Pack APPX using the committed script (avoids YAML/PS escaping issues)
       - name: Pack and Locate APPX
         id: locate
         shell: powershell
-        run: powershell -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\pack-appx.ps1"
+        run: powershell -ExecutionPolicy Bypass -File ".github\pack-appx.ps1"
 
       # Create self-signed cert (CN=Adoptsomekids matches Publisher in manifest)
       - name: Create signing certificate
