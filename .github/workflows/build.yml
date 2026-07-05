@@ -74,22 +74,36 @@ jobs:
         shell: powershell
         run: |
           $pkgDir = "$env:GITHUB_WORKSPACE\packages"
+          # The offline VS NuGet cache has Microsoft.Net.Native.Compiler and other deps
+          $vsNugetFeed = "C:\Program Files (x86)\Microsoft SDKs\NuGetPackages"
           Write-Host "Installing Microsoft.NETCore.UniversalWindowsPlatform 6.2.14..."
           nuget install Microsoft.NETCore.UniversalWindowsPlatform `
             -Version 6.2.14 `
             -OutputDirectory $pkgDir `
-            -NonInteractive
+            -Source "https://api.nuget.org/v3/index.json" `
+            -Source $vsNugetFeed `
+            -NonInteractive `
+            -DependencyVersion Highest
           Write-Host "Install exit code: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Standard install failed. Trying with IgnoreDependencies..."
+            nuget install Microsoft.NETCore.UniversalWindowsPlatform `
+              -Version 6.2.14 `
+              -OutputDirectory $pkgDir `
+              -Source "https://api.nuget.org/v3/index.json" `
+              -Source $vsNugetFeed `
+              -NonInteractive
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
-          # Verify key DLLs exist
+          # Verify package installed
           $netCorePath = Join-Path $pkgDir "Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
           if (Test-Path $netCorePath) {
             Write-Host "Package installed at: $netCorePath"
             Get-ChildItem $netCorePath -Recurse -Filter "System.Runtime.dll" |
               ForEach-Object { Write-Host "System.Runtime.dll: $($_.FullName)" }
           } else {
-            Write-Host "Package directory not found at expected path."
+            Write-Host "Package dir not found. Listing packages/:"
             Get-ChildItem $pkgDir | ForEach-Object { Write-Host $_.Name }
           }
 
