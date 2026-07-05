@@ -23,8 +23,13 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # Install Universal Windows Platform workload.
-      # This ensures Windows.winmd, BCL facades, and XamlCompiler targets are present.
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+        with:
+          nuget-version: '6.x'
+
+      # Install Universal Windows Platform workload so that Windows SDK,
+      # Windows.winmd, BCL facades, and XAML targets are all present.
       - name: Install UWP workload
         shell: powershell
         run: |
@@ -40,29 +45,46 @@ jobs:
             Write-Host "VS Installer not found, assuming workload already present."
           }
 
-      # Diagnostic: show SDK layout and XAML targets location.
+      # Diagnostic: show SDK layout and XAML targets.
       - name: Probe SDK and XAML targets
         shell: powershell
         run: |
           $kitsRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
-          Write-Host "=== Windows SDK UnionMetadata versions ==="
+          Write-Host "=== UnionMetadata versions ==="
           Get-ChildItem "$kitsRoot\UnionMetadata" -EA SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
-          Write-Host "=== Windows SDK References versions ==="
+          Write-Host "=== References versions ==="
           Get-ChildItem "$kitsRoot\References" -EA SilentlyContinue | Where-Object { $_.PSIsContainer } | ForEach-Object { Write-Host "  $($_.Name)" }
-          Write-Host "=== XAML targets locations ==="
+          Write-Host "=== XAML CSharp.targets ==="
           $vs = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
-          Get-ChildItem "$vs\MSBuild\Microsoft\WindowsXaml" -Recurse -Filter "*.targets" -EA SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
-          Write-Host "=== System.Runtime in SDK refs ==="
-          $rtPath = "$kitsRoot\References\10.0.19041.0\System.Runtime\10.0.19041.0\System.Runtime.dll"
-          Write-Host "  10.0.19041.0: $(Test-Path $rtPath)"
+          Get-ChildItem "$vs\MSBuild\Microsoft\WindowsXaml" -Recurse -Filter "Microsoft.Windows.UI.Xaml.CSharp.targets" -EA SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
 
-      - name: Restore NuGet packages
+      # NuGet restore pulls Microsoft.NETCore.UniversalWindowsPlatform 6.2.9
+      # which ships System.Runtime.dll and all other BCL facade DLLs.
+      # These are required by the XAML type-universe checker (WMC pass).
+      - name: NuGet Restore
         shell: powershell
         run: |
-          $nuget = "${env:ProgramFiles(x86)}\NuGet\nuget.exe"
-          if (-not (Test-Path $nuget)) { $nuget = "nuget" }
-          & $nuget restore "SaveBridge\SaveBridge.sln" -Verbosity quiet
-          Write-Host "NuGet restore: $LASTEXITCODE"
+          nuget restore "SaveBridge\SaveBridge.sln" -Verbosity normal
+          Write-Host "NuGet restore exit code: $LASTEXITCODE"
+
+      # Verify NUP was restored and contains the BCL facades.
+      - name: Verify NUP restore
+        shell: powershell
+        run: |
+          $nupDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9"
+          Write-Host "NUP dir exists: $(Test-Path $nupDir)"
+          $props = "$nupDir\build\Microsoft.NETCore.UniversalWindowsPlatform.props"
+          Write-Host "NUP props exists: $(Test-Path $props)"
+          $rtDir = "$nupDir\lib\uap10.0"
+          if (Test-Path $rtDir) {
+            Write-Host "NUP lib\uap10.0 contents:"
+            Get-ChildItem $rtDir -Filter "System.Runtime*" | ForEach-Object { Write-Host "  $($_.Name)" }
+          }
+          $refDir = "$nupDir\ref\uap10.0.15138"
+          if (Test-Path $refDir) {
+            Write-Host "NUP ref\uap10.0.15138 System.Runtime* files:"
+            Get-ChildItem $refDir -Filter "System.Runtime*" | ForEach-Object { Write-Host "  $($_.Name)" }
+          }
 
       - name: Build APPX (ARM64)
         shell: powershell

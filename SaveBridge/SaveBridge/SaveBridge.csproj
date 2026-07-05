@@ -3,12 +3,13 @@
   SaveBridge.csproj — XAML-free UWP AppContainerExe
   ==================================================
   Strategy:
-    - Import Microsoft.Windows.UI.Xaml.CSharp.targets so we get the full
-      UAP/AppX packaging pipeline (MakeAppx, etc.).
-    - Completely suppress the XAML compiler (WMC) pass via property overrides.
-    - No .xaml files, no <Page> items — WMC has nothing to process.
-    - Supply Windows.winmd + BCL facade HintPaths directly from the Windows SDK.
-    - Entry point: SaveBridge.SaveBridgeViewSource (IFrameworkViewSource).
+    - NuGet restores Microsoft.NETCore.UniversalWindowsPlatform (NUP) 6.2.9
+      which brings in the BCL facade DLLs (System.Runtime, mscorlib, etc.)
+      that the XAML CSharp.targets need for type-universe resolution.
+    - Import Microsoft.Windows.UI.Xaml.CSharp.targets for UAP/AppX packaging.
+    - No .xaml files, no <Page> items — WMC XAML compiler has nothing to process.
+    - Entry point: SaveBridge.SaveBridgeViewSource (IFrameworkViewSource) with
+      headless IFrameworkView that runs the HTTP save-bridge server.
 -->
 <Project ToolsVersion="15.0" DefaultTargets="Build"
          xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -27,7 +28,7 @@
     <AssemblyName>SaveBridge</AssemblyName>
     <DefaultLanguage>en-US</DefaultLanguage>
 
-    <!-- UAP target platform (must match a Windows SDK version on the build machine) -->
+    <!-- UAP target platform -->
     <TargetPlatformIdentifier>UAP</TargetPlatformIdentifier>
     <TargetPlatformVersion>10.0.19041.0</TargetPlatformVersion>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
@@ -41,27 +42,9 @@
     <AppxBundlePlatforms>ARM64</AppxBundlePlatforms>
     <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
 
-    <!-- AssemblyInfo is in Properties\AssemblyInfo.cs -->
+    <!-- AssemblyInfo.cs provides all assembly attributes -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <NuGetPackageImportStamp></NuGetPackageImportStamp>
-
-    <!-- C# language version — keep compatible with UWP BCL -->
-    <LangVersion>7.3</LangVersion>
-
-    <!-- ── XAML compiler suppression ───────────────────────────────── -->
-    <!--
-      These properties disable every XAML-related task injected by
-      Microsoft.Windows.UI.Xaml.CSharp.targets so the WMC type-universe
-      pass (which causes WMC1006) never runs.  The AppX packaging tasks
-      that live in Microsoft.Windows.UI.Xaml.Common.targets are unaffected
-      because they do not depend on the XAML compiler results.
-    -->
-    <DisableXbfGeneration>true</DisableXbfGeneration>
-    <DisableBuildXbfFromXaml>true</DisableBuildXbfFromXaml>
-    <!-- Blank out the targets that the XAML compiler hooks into -->
-    <MarkupCompilePass1DependsOn></MarkupCompilePass1DependsOn>
-    <MarkupCompilePass2DependsOn></MarkupCompilePass2DependsOn>
-    <XamlPreCompileDependsOn></XamlPreCompileDependsOn>
   </PropertyGroup>
 
   <!-- ── Release config ─────────────────────────────────────────────── -->
@@ -108,16 +91,32 @@
   </ItemGroup>
 
   <!--
-    Import the XAML/UAP C# targets.
-    This import provides:
-      - UWP BCL assembly references (mscorlib, System.Runtime facades, etc.)
-      - AppX/APPX packaging (MakeAppx, AppxManifest processing, etc.)
-    The XAML compiler tasks (WMC) are suppressed by the properties above.
+    NuGet package import — Microsoft.NETCore.UniversalWindowsPlatform
+    This .props file adds System.Runtime and all other BCL facades to the
+    compiler reference path (ReferencePath), which is what the XAML targets'
+    WMC type-universe pass needs to resolve System.Runtime, Version=4.0.0.0.
+    NuGet restores this to $(SolutionDir)\packages\ via packages.config.
+  -->
+  <Import Project="$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.props"
+          Condition="Exists('$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.props')" />
+
+  <!--
+    Import UAP/XAML C# targets last (as is standard for UAP projects).
+    Provides: UWP BCL assembly wiring, AppX packaging pipeline (MakeAppx).
+    WMC XAML compiler pass runs but finds no <Page> items — it is a no-op.
+    The type-universe check is satisfied by the NUP BCL facades above.
   -->
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '15.0' ">
     <VisualStudioVersion>15.0</VisualStudioVersion>
   </PropertyGroup>
 
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
+
+  <!--
+    NuGet package targets — imported AFTER Microsoft.Windows.UI.Xaml.CSharp.targets
+    (standard NuGet UAP project convention).
+  -->
+  <Import Project="$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.targets"
+          Condition="Exists('$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.targets')" />
 
 </Project>
