@@ -1,47 +1,37 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- SDK-style packaged Win32 targeting UWP Windows.Xbox -->
+    <!-- UWP AppContainer targeting Xbox — SDK-style, self-contained .NET 6 -->
     <TargetFramework>net6.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RuntimeIdentifiers>win10-x64</RuntimeIdentifiers>
 
-    <!-- WinExe so Main() is the real entry point -->
     <OutputType>WinExe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
 
-    <!-- Package identity -->
     <AssemblyName>SaveBridge</AssemblyName>
     <RootNamespace>SaveBridge</RootNamespace>
     <ApplicationId>Adoptsomekids.SaveBridge</ApplicationId>
     <Version>1.0.0.0</Version>
 
-    <!-- Self-contained: bundle the .NET runtime — no external framework deps needed on Xbox -->
+    <!-- Self-contained: bundle .NET runtime, no external framework packages on Xbox -->
     <SelfContained>true</SelfContained>
     <PublishSingleFile>false</PublishSingleFile>
 
-    <!-- APPX packaging -->
-    <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
+    <!-- APPX packaging — GenerateAppxPackageOnBuild requires MSBuild (not dotnet publish) -->
+    <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
-    <AppxBundle>Always</AppxBundle>
-    <AppxBundlePlatforms>x64</AppxBundlePlatforms>
-    <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
-    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
-    <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
-    <AppxPackageDir>$(MSBuildProjectDirectory)\AppPackages\</AppxPackageDir>
-
-    <!-- Suppress NuGet target-framework compat warnings -->
-    <NoWarn>$(NoWarn);NU1701</NoWarn>
+    <NoWarn>$(NoWarn);NU1701;NETSDK1138</NoWarn>
   </PropertyGroup>
 
-  <!-- Assets copied into the APPX payload -->
+  <!-- Assets published into the APPX layout -->
   <ItemGroup>
-    <Content Include="Assets\StoreLogo.png"  PackagePath="Assets\StoreLogo.png"  CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\Logo.png"       PackagePath="Assets\Logo.png"       CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\SmallLogo.png"  PackagePath="Assets\SmallLogo.png"  CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\WideLogo.png"   PackagePath="Assets\WideLogo.png"   CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\Splash.png"     PackagePath="Assets\Splash.png"     CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\StoreLogo.png"  CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Logo.png"       CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\SmallLogo.png"  CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\WideLogo.png"   CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Splash.png"     CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

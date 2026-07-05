@@ -49,12 +49,21 @@ jobs:
           # Copy all published binaries
           Copy-Item "publish\SaveBridge\*" $layout -Recurse -Force
 
-          # Copy Package.appxmanifest (repo root -> SaveBridge\SaveBridge\Package.appxmanifest)
-          Copy-Item "SaveBridge\SaveBridge\Package.appxmanifest" "$layout\AppxManifest.xml" -Force
+          # Copy Package.appxmanifest and resolve $targetnametoken$ -> SaveBridge
+          $manifest = Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw
+          $manifest = $manifest -replace '\$targetnametoken\$', 'SaveBridge'
+          Set-Content "$layout\AppxManifest.xml" -Value $manifest -Encoding UTF8
+          Write-Host "Manifest written (exe token resolved to SaveBridge.exe)"
 
-          # Copy assets (must be in Assets\ subfolder matching manifest)
-          New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
-          Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layout\Assets\" -Force
+          # Copy Assets from publish output (CopyToPublishDirectory puts them there)
+          if (Test-Path "publish\SaveBridge\Assets") {
+            Copy-Item "publish\SaveBridge\Assets" "$layout\Assets" -Recurse -Force
+            Write-Host "Assets copied from publish output"
+          } else {
+            New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
+            Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layout\Assets\" -Force
+            Write-Host "Assets copied from source"
+          }
 
           Write-Host "APPX layout (top-level):"
           Get-ChildItem $layout | Select-Object Name,Length | Format-Table
