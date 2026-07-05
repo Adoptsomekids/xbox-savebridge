@@ -107,30 +107,28 @@ jobs:
         shell: powershell
         run: |
           # The XAML compiler type universe needs System.Runtime.dll as a ReferencePath item.
-          # We inject it as an unconditional ItemGroup into the .csproj at build time,
-          # using the known absolute path from the downloaded NUP package.
+          # IMPORTANT: inject ONLY System.Runtime.dll — injecting all 153 NUP DLLs causes
+          # CS5001 (no Main) because the extra mscorlib/BCL facades conflict with the SDK's
+          # own reference assemblies that are already provided by the UAP targets.
           $pkgDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
           $sysRuntimeDll = "$pkgDir\ref\uap10.0.15138\System.Runtime.dll"
 
           if (-not (Test-Path $sysRuntimeDll)) {
-            Write-Host "System.Runtime.dll not found at expected path: $sysRuntimeDll"
+            Write-Host "System.Runtime.dll not found: $sysRuntimeDll"
             exit 1
           }
-          Write-Host "System.Runtime.dll confirmed at: $sysRuntimeDll"
+          Write-Host "System.Runtime.dll: $sysRuntimeDll"
 
           $csproj = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\SaveBridge.csproj"
           $content = Get-Content $csproj -Raw
 
-          # Build the injection block: an ItemGroup with ReferencePath items for all BCL dlls
-          $refDir = "$pkgDir\ref\uap10.0.15138"
-          $dlls = Get-ChildItem $refDir -Filter "*.dll" | ForEach-Object { $_.FullName }
-          $items = ($dlls | ForEach-Object { "    <ReferencePath Include=`"$_`" />" }) -join "`n"
-          $injection = "<ItemGroup>`n$items`n  </ItemGroup>"
+          # Inject ONLY System.Runtime.dll as a ReferencePath item
+          $item = "    <ReferencePath Include=`"$sysRuntimeDll`" />"
+          $injection = "<ItemGroup>`n$item`n  </ItemGroup>"
 
-          # Inject before the closing </Project> tag
           $patched = $content -replace '</Project>', "  $injection`n</Project>"
           Set-Content $csproj $patched -Encoding UTF8
-          Write-Host "Injected $($dlls.Count) ReferencePath items into SaveBridge.csproj"
+          Write-Host "Injected System.Runtime.dll ReferencePath into SaveBridge.csproj"
 
       - name: Build APPX (ARM64)
         shell: powershell
