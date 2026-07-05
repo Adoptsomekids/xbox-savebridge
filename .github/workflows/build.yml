@@ -107,7 +107,7 @@ jobs:
         shell: powershell
         run: |
           # The XAML compiler type universe needs System.Runtime.dll as a ReferencePath item.
-          # IMPORTANT: inject ONLY System.Runtime.dll — injecting all 153 NUP DLLs causes
+          # IMPORTANT: inject ONLY System.Runtime.dll. Injecting all 153 NUP DLLs causes
           # CS5001 (no Main) because the extra mscorlib/BCL facades conflict with the SDK's
           # own reference assemblies that are already provided by the UAP targets.
           $pkgDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
