@@ -104,7 +104,7 @@ jobs:
 
       # Build the APPX. The /p:DisableXbfGeneration=true suppresses the XAML
       # compiler type-universe pass (WMC) so WMC1006 cannot fire.
-      - name: Build APPX (ARM64)
+      - name: Build APPX (x64)
         shell: powershell
         run: |
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
@@ -115,9 +115,9 @@ jobs:
 
           & $msbuild "SaveBridge\SaveBridge.sln" `
             /p:Configuration=Release `
-            /p:Platform=ARM64 `
+            /p:Platform=x64 `
             /p:AppxBundle=Always `
-            /p:AppxBundlePlatforms="ARM64" `
+            /p:AppxBundlePlatforms="x64" `
             /p:AppxPackageSigningEnabled=false `
             /p:UapAppxPackageBuildMode=SideloadOnly `
             /p:GenerateAppInstallerFile=false `
