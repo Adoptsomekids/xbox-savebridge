@@ -35,7 +35,7 @@ jobs:
               --quiet --norestart --force 2>&1
             Write-Host "UWP workload install exit code: $LASTEXITCODE"
           } else {
-            Write-Host "VS Installer not found, listing directory..."
+            Write-Host "VS Installer not found at expected path."
             Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\" -ErrorAction SilentlyContinue
           }
 
@@ -61,54 +61,37 @@ jobs:
               Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
           }
 
-      # No PackageReference: project uses no external NuGet packages.
-      # System.Runtime and Windows SDK types are provided by the UWP platform SDK.
+      # Install Microsoft.NETCore.UniversalWindowsPlatform into packages/ folder.
+      # This package provides System.Runtime and other references needed by the
+      # XAML pre-compiler type universe. We use nuget install (not restore) so
+      # the package lands at a known path we can reference with HintPath.
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
         with:
           nuget-version: '6.x'
 
-      - name: Restore NuGet packages
+      - name: Install Microsoft.NETCore.UniversalWindowsPlatform package
         shell: powershell
         run: |
-          Write-Host "No external packages to restore."
-          Write-Host "UWP SDK types (System.Runtime, Windows.Gaming.XboxLive.Storage) come from the platform SDK."
+          $pkgDir = "$env:GITHUB_WORKSPACE\packages"
+          Write-Host "Installing Microsoft.NETCore.UniversalWindowsPlatform 6.2.14..."
+          nuget install Microsoft.NETCore.UniversalWindowsPlatform `
+            -Version 6.2.14 `
+            -OutputDirectory $pkgDir `
+            -NonInteractive
+          Write-Host "Install exit code: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Find System.Runtime path for XAML compiler
-        shell: powershell
-        id: find_sysruntime
-        run: |
-          # The XAML compiler (XamlCompiler/WMC1006) requires System.Runtime.dll
-          # in its type universe. Find it on this runner.
-          $candidates = @(
-            "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETCore\v4.5",
-            "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETCore\v4.5.1",
-            "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\v4.0",
-            "C:\Windows\Microsoft.NET\Framework64\v4.0.30319",
-            "C:\Windows\Microsoft.NET\Framework\v4.0.30319"
-          )
-          $found = ""
-          foreach ($dir in $candidates) {
-            $dll = Join-Path $dir "System.Runtime.dll"
-            if (Test-Path $dll) {
-              Write-Host "Found System.Runtime.dll at: $dll"
-              $found = $dir
-              break
-            }
+          # Verify key DLLs exist
+          $netCorePath = Join-Path $pkgDir "Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
+          if (Test-Path $netCorePath) {
+            Write-Host "Package installed at: $netCorePath"
+            Get-ChildItem $netCorePath -Recurse -Filter "System.Runtime.dll" |
+              ForEach-Object { Write-Host "System.Runtime.dll: $($_.FullName)" }
+          } else {
+            Write-Host "Package directory not found at expected path."
+            Get-ChildItem $pkgDir | ForEach-Object { Write-Host $_.Name }
           }
-          if (-not $found) {
-            Write-Host "System.Runtime.dll not found in standard locations, searching..."
-            $dll = Get-ChildItem "C:\Program Files (x86)" -Recurse -Filter "System.Runtime.dll" -ErrorAction SilentlyContinue |
-              Where-Object { $_.DirectoryName -like "*Reference*" -or $_.DirectoryName -like "*NETCore*" } |
-              Select-Object -First 1
-            if ($dll) {
-              Write-Host "Found at: $($dll.FullName)"
-              $found = $dll.DirectoryName
-            } else {
-              Write-Host "System.Runtime.dll not found anywhere under Program Files (x86)"
-            }
-          }
-          echo "sysruntime_dir=$found" >> $env:GITHUB_OUTPUT
 
       - name: Build APPX (ARM64)
         shell: powershell
@@ -119,8 +102,8 @@ jobs:
           if (-not $msbuild) { $msbuild = "msbuild" }
           Write-Host "Using MSBuild: $msbuild"
 
-          $sysRuntimeDir = "${{ steps.find_sysruntime.outputs.sysruntime_dir }}"
-          Write-Host "System.Runtime path: $sysRuntimeDir"
+          # Point MSBuild at the NuGet packages folder so the .csproj import resolves
+          $pkgDir = "$env:GITHUB_WORKSPACE\packages"
 
           & $msbuild SaveBridge/SaveBridge.sln `
             /p:Configuration=Release `
@@ -130,7 +113,7 @@ jobs:
             /p:AppxPackageSigningEnabled=false `
             /p:UapAppxPackageBuildMode=SideloadOnly `
             /p:GenerateAppInstallerFile=false `
-            /p:AdditionalLibPaths="$sysRuntimeDir" `
+            /p:NuGetPackagesRoot="$pkgDir" `
             /t:Build `
             /m `
             /v:normal

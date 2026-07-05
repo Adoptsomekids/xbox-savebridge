@@ -3,6 +3,13 @@
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
           Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
 
+  <!-- Import Microsoft.NETCore.UniversalWindowsPlatform props which adds System.Runtime
+       and other BCL assemblies to the XAML compiler reference path.
+       This resolves WMC1006: Type universe cannot resolve assembly System.Runtime.
+       NuGetPackagesRoot is set by the CI workflow (defaults to packages/ under workspace). -->
+  <Import Project="$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\uap10.0\Microsoft.NETCore.UniversalWindowsPlatform.props"
+          Condition="Exists('$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\uap10.0\Microsoft.NETCore.UniversalWindowsPlatform.props')" />
+
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">ARM64</Platform>
@@ -93,4 +100,8 @@
   </PropertyGroup>
 
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
+
+  <!-- Import Microsoft.NETCore.UniversalWindowsPlatform targets (after the XAML targets) -->
+  <Import Project="$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\uap10.0\Microsoft.NETCore.UniversalWindowsPlatform.targets"
+          Condition="Exists('$(NuGetPackagesRoot)\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14\build\uap10.0\Microsoft.NETCore.UniversalWindowsPlatform.targets')" />
 </Project>
