@@ -117,10 +117,11 @@
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
 
   <!--
-    NuGet package targets — imported AFTER Microsoft.Windows.UI.Xaml.CSharp.targets
-    (standard NuGet UAP project convention).
+    NUP .targets is intentionally NOT imported here.
+    The NUP .targets file performs a runtime validation that requires
+    project.json with "win10" in runtimes, which breaks the restore.
+    We only need the .props (which adds BCL facades to ReferencePath)
+    and the explicit <Reference> items injected by the workflow step.
   -->
-  <Import Project="$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.targets"
-          Condition="Exists('$(SolutionDir)\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.9\build\Microsoft.NETCore.UniversalWindowsPlatform.targets')" />
 
 </Project>
