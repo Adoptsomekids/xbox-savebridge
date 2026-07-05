@@ -70,15 +70,22 @@ jobs:
       - name: Restore NuGet packages
         shell: powershell
         run: |
-          Write-Host "Restoring packages for SaveBridge solution..."
-          nuget restore SaveBridge/SaveBridge.sln -Verbosity normal
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "nuget restore failed (exit $LASTEXITCODE), trying msbuild /t:Restore..."
-            $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-              -latest -requires Microsoft.Component.MSBuild `
-              -find MSBuild\**\Bin\MSBuild.exe
-            & $msbuild SaveBridge/SaveBridge.sln /t:Restore /p:Configuration=Release /p:Platform=ARM64 /v:minimal
-          }
+          # Use MSBuild /t:Restore so RuntimeIdentifier is passed correctly into project.assets.json
+          # (nuget.exe restore does not pass RID properties, causing NuGet.targets line 198 failure)
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.Component.MSBuild `
+            -find MSBuild\**\Bin\MSBuild.exe
+          if (-not $msbuild) { $msbuild = "msbuild" }
+          Write-Host "Using MSBuild for restore: $msbuild"
+          & $msbuild SaveBridge/SaveBridge.sln `
+            /t:Restore `
+            /p:Configuration=Release `
+            /p:Platform=ARM64 `
+            /p:RuntimeIdentifier=win10-arm64 `
+            /p:RuntimeIdentifiers=win10-arm64 `
+            /v:normal
+          Write-Host "Restore exit code: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build APPX (ARM64)
         shell: powershell
