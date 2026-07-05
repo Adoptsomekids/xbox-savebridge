@@ -1,35 +1,70 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<!--
+  SaveBridge.csproj — XAML-free UWP AppContainerExe
+  ==================================================
+  Strategy:
+    - Import Microsoft.Windows.UI.Xaml.CSharp.targets so we get the full
+      UAP/AppX packaging pipeline (MakeAppx, etc.).
+    - Completely suppress the XAML compiler (WMC) pass via property overrides.
+    - No .xaml files, no <Page> items — WMC has nothing to process.
+    - Supply Windows.winmd + BCL facade HintPaths directly from the Windows SDK.
+    - Entry point: SaveBridge.SaveBridgeViewSource (IFrameworkViewSource).
+-->
+<Project ToolsVersion="15.0" DefaultTargets="Build"
+         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
           Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
 
+  <!-- ── Core properties ─────────────────────────────────────────────── -->
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">ARM64</Platform>
+    <Platform      Condition=" '$(Platform)'      == '' ">ARM64</Platform>
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
-    <!-- AppContainerExe with no XAML — plain CoreApplication loop -->
     <OutputType>AppContainerExe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>SaveBridge</RootNamespace>
     <AssemblyName>SaveBridge</AssemblyName>
     <DefaultLanguage>en-US</DefaultLanguage>
+
+    <!-- UAP target platform (must match a Windows SDK version on the build machine) -->
     <TargetPlatformIdentifier>UAP</TargetPlatformIdentifier>
-    <TargetPlatformVersion>10.0.22621.0</TargetPlatformVersion>
+    <TargetPlatformVersion>10.0.19041.0</TargetPlatformVersion>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <MinimumVisualStudioVersion>16</MinimumVisualStudioVersion>
-    <FileAlignment>512</FileAlignment>
-    <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+
+    <!-- Packaging -->
     <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
     <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
     <AppxBundle>Always</AppxBundle>
     <AppxBundlePlatforms>ARM64</AppxBundlePlatforms>
     <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
+
+    <!-- AssemblyInfo is in Properties\AssemblyInfo.cs -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <NuGetPackageImportStamp>
-    </NuGetPackageImportStamp>
+    <NuGetPackageImportStamp></NuGetPackageImportStamp>
+
+    <!-- C# language version — keep compatible with UWP BCL -->
+    <LangVersion>7.3</LangVersion>
+
+    <!-- ── XAML compiler suppression ───────────────────────────────── -->
+    <!--
+      These properties disable every XAML-related task injected by
+      Microsoft.Windows.UI.Xaml.CSharp.targets so the WMC type-universe
+      pass (which causes WMC1006) never runs.  The AppX packaging tasks
+      that live in Microsoft.Windows.UI.Xaml.Common.targets are unaffected
+      because they do not depend on the XAML compiler results.
+    -->
+    <DisableXbfGeneration>true</DisableXbfGeneration>
+    <DisableBuildXbfFromXaml>true</DisableBuildXbfFromXaml>
+    <!-- Blank out the targets that the XAML compiler hooks into -->
+    <MarkupCompilePass1DependsOn></MarkupCompilePass1DependsOn>
+    <MarkupCompilePass2DependsOn></MarkupCompilePass2DependsOn>
+    <XamlPreCompileDependsOn></XamlPreCompileDependsOn>
   </PropertyGroup>
 
+  <!-- ── Release config ─────────────────────────────────────────────── -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|ARM64'">
     <OutputPath>bin\ARM64\Release\</OutputPath>
     <DefineConstants>TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
@@ -37,6 +72,7 @@
     <DebugType>pdbonly</DebugType>
   </PropertyGroup>
 
+  <!-- ── Debug config ───────────────────────────────────────────────── -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|ARM64'">
     <DebugSymbols>true</DebugSymbols>
     <OutputPath>bin\ARM64\Debug\</OutputPath>
@@ -45,19 +81,22 @@
     <Optimize>false</Optimize>
   </PropertyGroup>
 
-  <!-- No XAML pages — pure C# CoreApplication app to avoid the XAML compiler entirely -->
+  <!-- ── Source files ───────────────────────────────────────────────── -->
   <ItemGroup>
-    <Compile Include="App.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="SaveBridgeView.cs" />
     <Compile Include="SaveBridgeServer.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
 
+  <!-- ── Package manifest ───────────────────────────────────────────── -->
   <ItemGroup>
     <AppxManifest Include="Package.appxmanifest">
       <SubType>Designer</SubType>
     </AppxManifest>
   </ItemGroup>
 
+  <!-- ── Assets ─────────────────────────────────────────────────────── -->
   <ItemGroup>
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
     <Content Include="Assets\SplashScreen.scale-200.png" />
@@ -68,10 +107,17 @@
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
   </ItemGroup>
 
+  <!--
+    Import the XAML/UAP C# targets.
+    This import provides:
+      - UWP BCL assembly references (mscorlib, System.Runtime facades, etc.)
+      - AppX/APPX packaging (MakeAppx, AppxManifest processing, etc.)
+    The XAML compiler tasks (WMC) are suppressed by the properties above.
+  -->
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '15.0' ">
     <VisualStudioVersion>15.0</VisualStudioVersion>
   </PropertyGroup>
 
-  <!-- Use the plain CSharp targets, NOT the XAML ones (no MarkupCompile/XamlPreCompile) -->
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
+
 </Project>

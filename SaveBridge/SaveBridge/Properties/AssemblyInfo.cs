@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 [assembly: AssemblyTitle("SaveBridge")]
 [assembly: AssemblyDescription("Universal Xbox game save bridge — exposes Connected Storage over local HTTP")]
