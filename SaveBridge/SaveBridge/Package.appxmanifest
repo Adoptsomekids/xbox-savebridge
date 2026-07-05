@@ -22,7 +22,8 @@
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
   </Dependencies>
 
   <Resources>
@@ -32,21 +33,21 @@
   <Applications>
     <Application Id="App"
       Executable="$targetnametoken$.exe"
-      EntryPoint="SaveBridge.SaveBridgeApp">
+      EntryPoint="SaveBridge.App">
       <uap:VisualElements
         DisplayName="SaveBridge"
-        Square150x150Logo="Assets\Logo.png"
-        Square44x44Logo="Assets\SmallLogo.png"
-        Description="Xbox save bridge - Dead Island DE saves over local HTTP"
+        Square150x150Logo="Assets\Square150x150Logo.scale-200.png"
+        Square44x44Logo="Assets\Square44x44Logo.scale-200.png"
+        Description="Xbox Save Bridge - Dead Island DE saves over local HTTP"
         BackgroundColor="#1a1a2e">
-        <uap:DefaultTile Wide310x150Logo="Assets\WideLogo.png" />
-        <uap:SplashScreen Image="Assets\Splash.png" />
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.scale-200.png"/>
+        <uap:SplashScreen Image="Assets\SplashScreen.scale-200.png" />
       </uap:VisualElements>
     </Application>
   </Applications>
 
   <Capabilities>
-    <Capability Name="internetClientServer" />
+    <Capability Name="internetClient" />
     <Capability Name="privateNetworkClientServer" />
     <xbox:Capability Name="connectedStorageAccess" />
   </Capabilities>

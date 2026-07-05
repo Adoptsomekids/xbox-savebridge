@@ -1,4 +1,4 @@
-name: Build APPX (Windows)
+name: Build APPX (Legacy UAP)
 
 on:
   push:
@@ -20,57 +20,101 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 6
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '6.0.x'
+      # MSBuild is required for legacy UAP projects (ToolsVersion=15.0, WindowsXaml targets)
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-      # Publish self-contained x64 binary
-      - name: Publish (self-contained x64)
+      # NuGet restore — legacy UAP uses packages.config-style PackageReference restore
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: NuGet Restore
         shell: powershell
         run: |
-          dotnet publish "SaveBridge\SaveBridge\SaveBridge.csproj" `
-            -c Release `
-            -r win10-x64 `
-            --self-contained true `
-            -p:PublishSingleFile=false `
-            -o "publish\SaveBridge"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host "Publish output:"
-          Get-ChildItem "publish\SaveBridge" | Select-Object Name,Length | Format-Table
-
-      # Assemble the APPX layout folder
-      - name: Assemble APPX layout
-        shell: powershell
-        run: |
-          $layout = "appx_layout"
-          New-Item -ItemType Directory -Force -Path $layout | Out-Null
-
-          # Copy all published binaries
-          Copy-Item "publish\SaveBridge\*" $layout -Recurse -Force
-
-          # Copy Package.appxmanifest and resolve $targetnametoken$ -> SaveBridge
-          $manifest = Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw
-          $manifest = $manifest -replace '\$targetnametoken\$', 'SaveBridge'
-          Set-Content "$layout\AppxManifest.xml" -Value $manifest -Encoding UTF8
-          Write-Host "Manifest written (exe token resolved to SaveBridge.exe)"
-
-          # Copy Assets from publish output (CopyToPublishDirectory puts them there)
-          if (Test-Path "publish\SaveBridge\Assets") {
-            Copy-Item "publish\SaveBridge\Assets" "$layout\Assets" -Recurse -Force
-            Write-Host "Assets copied from publish output"
-          } else {
-            New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
-            Copy-Item "SaveBridge\SaveBridge\Assets\*" "$layout\Assets\" -Force
-            Write-Host "Assets copied from source"
+          nuget restore "SaveBridge\SaveBridge.sln" -Verbosity quiet
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "nuget restore failed, trying msbuild /t:Restore..."
+            msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" /t:Restore /p:Configuration=Release /p:Platform=x64 /v:minimal
           }
 
-          Write-Host "APPX layout (top-level):"
-          Get-ChildItem $layout | Select-Object Name,Length | Format-Table
-          Write-Host "Assets:"
-          Get-ChildItem "$layout\Assets" | Select-Object Name | Format-Table
+      # Build with MSBuild targeting Release|x64
+      # GenerateAppxPackageOnBuild=true tells the UAP targets to produce the APPX layout
+      - name: Build with MSBuild
+        shell: powershell
+        run: |
+          msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:AppxPackageSigningEnabled=false `
+            /p:GenerateAppxPackageOnBuild=true `
+            /p:AppxBundle=Never `
+            /p:UapAppxPackageBuildMode=SideloadOnly `
+            /v:minimal `
+            /m
 
-      # Create self-signed cert (CN=Adoptsomekids matches Package.appxmanifest Publisher)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Show what was produced
+          Write-Host "Build output:"
+          Get-ChildItem "SaveBridge\SaveBridge\bin\x64\Release" -Recurse -Filter "*.appx" |
+            Select-Object FullName,Length | Format-Table
+
+      # The MSBuild UAP targets put the APPX in bin\x64\Release\AppPackages\
+      - name: Locate APPX
+        id: locate
+        shell: powershell
+        run: |
+          $appxSearch = @(
+            "SaveBridge\SaveBridge\bin\x64\Release\AppPackages",
+            "SaveBridge\SaveBridge\bin\x64\Release",
+            "SaveBridge\SaveBridge\AppPackages"
+          )
+
+          $appx = $null
+          foreach ($dir in $appxSearch) {
+            if (Test-Path $dir) {
+              $appx = Get-ChildItem $dir -Recurse -Filter "*.appx" | Select-Object -First 1
+              if ($appx) { break }
+            }
+          }
+
+          if (-not $appx) {
+            Write-Host "APPX not found via GenerateAppxPackageOnBuild, assembling manually..."
+
+            # Manual assembly fallback — copy layout and run MakeAppx
+            $layout = "appx_layout"
+            New-Item -ItemType Directory -Force -Path $layout | Out-Null
+
+            $binDir = "SaveBridge\SaveBridge\bin\x64\Release"
+            Copy-Item "$binDir\*" $layout -Recurse -Force -ErrorAction SilentlyContinue
+
+            # Manifest
+            $manifest = Get-Content "SaveBridge\SaveBridge\Package.appxmanifest" -Raw
+            $manifest = $manifest -replace '\$targetnametoken\$', 'SaveBridge'
+            Set-Content "$layout\AppxManifest.xml" -Value $manifest -Encoding UTF8
+
+            # Assets
+            $assetSrc = "SaveBridge\SaveBridge\Assets"
+            New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
+            Copy-Item "$assetSrc\*" "$layout\Assets\" -Force
+
+            $makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+              -Recurse -Filter "makeappx.exe" |
+              Where-Object { $_.FullName -like "*x64*" } |
+              Select-Object -First 1 -ExpandProperty FullName
+
+            if (-not $makeappx) { Write-Error "MakeAppx.exe not found"; exit 1 }
+
+            $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
+            & $makeappx pack /d $layout /p "$appxPath" /overwrite /nv
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            echo "appx_path=$appxPath" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
+            Write-Host "Found APPX: $($appx.FullName)"
+          }
+
+      # Create self-signed cert (CN=Adoptsomekids matches Publisher in manifest)
       - name: Create signing certificate
         id: cert
         shell: powershell
@@ -82,11 +126,9 @@ jobs:
             -CertStoreLocation "Cert:\CurrentUser\My" `
             -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
 
-          # Export .cer for Xbox installation
           $cerPath = "$env:GITHUB_WORKSPACE\SaveBridge-DevCert.cer"
           Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
 
-          # Export .pfx for signing
           $pfxPath = "$env:GITHUB_WORKSPACE\SaveBridge-Dev.pfx"
           $pwd = ConvertTo-SecureString -String "SaveBridgeDev" -Force -AsPlainText
           Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pwd | Out-Null
@@ -94,34 +136,7 @@ jobs:
           Write-Host "Cert thumbprint: $($cert.Thumbprint)"
           echo "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
           echo "cer_path=$cerPath"               >> $env:GITHUB_OUTPUT
-          echo "pfx_path=$pfxPath"               >> $env:GITHUB_OUTPUT
 
-      # Pack the APPX using MakeAppx.exe
-      - name: Pack APPX
-        id: pack
-        shell: powershell
-        run: |
-          # Locate MakeAppx.exe from Windows SDK
-          $makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
-            -Recurse -Filter "makeappx.exe" |
-            Where-Object { $_.FullName -like "*x64*" } |
-            Select-Object -First 1 -ExpandProperty FullName
-
-          if (-not $makeappx) {
-            Write-Error "MakeAppx.exe not found"
-            exit 1
-          }
-          Write-Host "MakeAppx: $makeappx"
-
-          $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
-
-          & $makeappx pack /d "appx_layout" /p "$appxPath" /overwrite /nv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          Write-Host "APPX created: $appxPath ($($(Get-Item $appxPath).Length) bytes)"
-          echo "appx_path=$appxPath" >> $env:GITHUB_OUTPUT
-
-      # Sign with the dev cert
       - name: Sign APPX
         shell: powershell
         run: |
@@ -131,14 +146,12 @@ jobs:
             Select-Object -First 1 -ExpandProperty FullName
 
           Write-Host "signtool: $signtool"
+          Write-Host "APPX: ${{ steps.locate.outputs.appx_path }}"
 
           & $signtool sign /fd SHA256 /sha1 "${{ steps.cert.outputs.thumbprint }}" `
-            "${{ steps.pack.outputs.appx_path }}"
+            "${{ steps.locate.outputs.appx_path }}"
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "signtool failed with $LASTEXITCODE"
-            exit $LASTEXITCODE
-          }
+          if ($LASTEXITCODE -ne 0) { Write-Error "signtool failed"; exit $LASTEXITCODE }
           Write-Host "Signed OK"
 
       - name: Upload APPX artifact
@@ -146,7 +159,7 @@ jobs:
         with:
           name: SaveBridge-APPX
           path: |
-            ${{ steps.pack.outputs.appx_path }}
+            ${{ steps.locate.outputs.appx_path }}
             ${{ steps.cert.outputs.cer_path }}
           retention-days: 30
           if-no-files-found: error
@@ -156,7 +169,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.pack.outputs.appx_path }}
+            ${{ steps.locate.outputs.appx_path }}
             ${{ steps.cert.outputs.cer_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
