@@ -169,6 +169,14 @@ function dispatch(head, bodyBytes, remote, socket) {
         var rp = query["path"] || "";
         if (!rp) { sendJson(writer, 400, {error:"path required"}); done(); }
         else { handleDiDownload(writer, rp, done); }
+    } else if (path === "/cs/list" && method === "GET") {
+        // Connected Storage (GameSaveProvider) — access Dead Island DE saves directly
+        handleCsList(writer, done);
+    } else if (path === "/cs/download" && method === "GET") {
+        var container = query["container"] || "";
+        var blob      = query["blob"] || "";
+        if (!container || !blob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
+        else { handleCsDownload(writer, container, blob, done); }
     } else {
         sendJson(writer, 404, {error:"not found", path:path});
         done();
@@ -278,6 +286,76 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
             sendJson(writer, 500, { error: e && e.message ? e.message : "mkdir error" });
             done();
         });
+    });
+}
+
+// ── Connected Storage (GameSaveProvider) handlers ───────────────────────────
+// Dead Island DE SCID: db860100-d780-4e17-8685-ad130052ea64
+var DI_SCID = "db860100-d780-4e17-8685-ad130052ea64";
+var _csProvider = null;
+
+function getOrOpenProvider(callback) {
+    if (_csProvider) { callback(null, _csProvider); return; }
+
+    Windows.System.User.findAllAsync().then(function (users) {
+        var user = users.size > 0 ? users.getAt(0) : null;
+        if (!user) { callback("No Xbox user found"); return; }
+
+        Windows.Gaming.XboxLive.Storage.GameSaveProvider.getForUserAsync(user, DI_SCID)
+        .then(function (result) {
+            if (result.status === Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok) {
+                _csProvider = result.value;
+                callback(null, _csProvider);
+            } else {
+                callback("GameSaveProvider status: " + result.status);
+            }
+        }, function (e) { callback(e && e.message ? e.message : String(e)); });
+    }, function (e) { callback(e && e.message ? e.message : String(e)); });
+}
+
+// GET /cs/list — list all containers + blobs via GameSaveProvider
+function handleCsList(writer, done) {
+    getOrOpenProvider(function (err, provider) {
+        if (err) {
+            sendJson(writer, 500, { error: err, scid: DI_SCID });
+            done(); return;
+        }
+        var query = provider.createContainerInfoQuery();
+        query.getContainerInfoAsync().then(function (result) {
+            if (result.status !== Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok) {
+                sendJson(writer, 500, { error: "getContainerInfo: " + result.status });
+                done(); return;
+            }
+            var containers = [];
+            result.value.forEach(function (c) {
+                containers.push({ name: c.name, displayName: c.displayName, totalSize: c.totalSize });
+            });
+            sendJson(writer, 200, { scid: DI_SCID, containers: containers });
+            done();
+        }, function (e) { sendJson(writer, 500, { error: e.message }); done(); });
+    });
+}
+
+// GET /cs/download?container=NAME&blob=BLOB — download blob via GameSaveProvider
+function handleCsDownload(writer, containerName, blobName, done) {
+    getOrOpenProvider(function (err, provider) {
+        if (err) { sendJson(writer, 500, { error: err }); done(); return; }
+
+        var container = provider.createContainer(containerName);
+        var names = new Windows.Foundation.Collections.PropertySet();
+        // Read names is a Windows.Foundation.Collections.IIterable<String>
+        container.getAsync([blobName]).then(function (result) {
+            if (result.status !== Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok) {
+                sendJson(writer, 500, { error: "getAsync: " + result.status });
+                done(); return;
+            }
+            var buf = result.value.lookup(blobName);
+            if (!buf) { sendJson(writer, 404, { error: "blob not found" }); done(); return; }
+            var bytes = new Uint8Array(buf.length);
+            Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+            sendBinary(writer, bytes, blobName);
+            done();
+        }, function (e) { sendJson(writer, 500, { error: e.message }); done(); });
     });
 }
 

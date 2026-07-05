@@ -4,7 +4,8 @@
   xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap mp rescap">
+  xmlns:xbox="http://schemas.microsoft.com/appx/manifest/xbox/windows10"
+  IgnorableNamespaces="uap mp rescap xbox">
 
   <Identity
     Name="Adoptsomekids.SaveBridge"
@@ -49,7 +50,7 @@
   <Capabilities>
     <Capability Name="internetClient" />
     <Capability Name="privateNetworkClientServer" />
-    <rescap:Capability Name="broadFileSystemAccess" />
+    <xbox:Capability Name="connectedStorageAccess" />
   </Capabilities>
 
 </Package>
