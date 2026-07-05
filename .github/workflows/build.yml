@@ -25,62 +25,45 @@ jobs:
         with:
           dotnet-version: '6.0.x'
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      # Restore NuGet packages
-      - name: Restore
+      # Publish self-contained x64 binary
+      - name: Publish (self-contained x64)
         shell: powershell
         run: |
-          dotnet restore "SaveBridge\SaveBridge\SaveBridge.csproj" -r win10-x64
+          dotnet publish "SaveBridge\SaveBridge\SaveBridge.csproj" `
+            -c Release `
+            -r win10-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=false `
+            -o "publish\SaveBridge"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Publish output:"
+          Get-ChildItem "publish\SaveBridge" | Select-Object Name,Length | Format-Table
 
-      # Build self-contained packaged Win32 APPX (Windows.FullTrustApplication, runFullTrust)
-      - name: Build APPX (x64, self-contained)
+      # Assemble the APPX layout folder
+      - name: Assemble APPX layout
         shell: powershell
         run: |
-          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-            -latest -requires Microsoft.Component.MSBuild `
-            -find MSBuild\**\Bin\MSBuild.exe 2>$null
-          if (-not $msbuild) { $msbuild = "msbuild" }
-          Write-Host "Using MSBuild: $msbuild"
+          $layout = "appx_layout"
+          New-Item -ItemType Directory -Force -Path $layout | Out-Null
 
-          & $msbuild "SaveBridge\SaveBridge\SaveBridge.csproj" `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
-            /p:RuntimeIdentifier=win10-x64 `
-            /p:SelfContained=true `
-            /p:AppxBundle=Always `
-            /p:AppxBundlePlatforms="x64" `
-            /p:AppxPackageSigningEnabled=false `
-            /p:UapAppxPackageBuildMode=SideloadOnly `
-            /p:GenerateAppInstallerFile=false `
-            /t:Build `
-            /m `
-            /v:normal
+          # Copy all published binaries
+          Copy-Item "publish\SaveBridge\*" $layout -Recurse -Force
 
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Copy Package.appxmanifest
+          Copy-Item "SaveBridge\SaveBridge\SaveBridge\Package.appxmanifest" "$layout\AppxManifest.xml" -Force
 
-          Write-Host "=== Build output ==="
-          Get-ChildItem -Recurse -Include "*.appx","*.appxbundle","*.msix","*.msixbundle" | ForEach-Object { Write-Host $_.FullName }
+          # Copy assets (must be in Assets\ subfolder matching manifest)
+          New-Item -ItemType Directory -Force -Path "$layout\Assets" | Out-Null
+          Copy-Item "SaveBridge\SaveBridge\SaveBridge\Assets\*" "$layout\Assets\" -Force
 
-      # Sign with a fresh self-signed dev cert (CN=Adoptsomekids, same as Package.appxmanifest Publisher)
-      - name: Sign APPX bundle
-        if: success()
-        id: sign_appx
+          Write-Host "APPX layout:"
+          Get-ChildItem $layout -Recurse | Select-Object FullName | Format-Table
+
+      # Create self-signed cert (CN=Adoptsomekids matches Package.appxmanifest Publisher)
+      - name: Create signing certificate
+        id: cert
         shell: powershell
         run: |
-          # Locate bundle
-          $bundle = Get-ChildItem -Recurse -Filter "*.msixbundle" | Select-Object -First 1
-          if (-not $bundle) { $bundle = Get-ChildItem -Recurse -Filter "*.appxbundle" | Select-Object -First 1 }
-          if (-not $bundle) {
-            Write-Host "No bundle found - listing APPX output:"
-            Get-ChildItem -Recurse -Include "*.appx","*.msix"
-            exit 0
-          }
-          Write-Host "Bundle to sign: $($bundle.FullName)"
-
-          # Create self-signed cert matching Publisher = CN=Adoptsomekids
           $cert = New-SelfSignedCertificate `
             -Type Custom -Subject "CN=Adoptsomekids" `
             -KeyUsage DigitalSignature `
@@ -88,78 +71,81 @@ jobs:
             -CertStoreLocation "Cert:\CurrentUser\My" `
             -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
 
-          # Export public cert so the user can install it on Xbox
+          # Export .cer for Xbox installation
           $cerPath = "$env:GITHUB_WORKSPACE\SaveBridge-DevCert.cer"
           Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
-          Write-Host "Exported cert: $cerPath"
 
-          # Sign
+          # Export .pfx for signing
+          $pfxPath = "$env:GITHUB_WORKSPACE\SaveBridge-Dev.pfx"
+          $pwd = ConvertTo-SecureString -String "SaveBridgeDev" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pwd | Out-Null
+
+          Write-Host "Cert thumbprint: $($cert.Thumbprint)"
+          echo "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          echo "cer_path=$cerPath"               >> $env:GITHUB_OUTPUT
+          echo "pfx_path=$pfxPath"               >> $env:GITHUB_OUTPUT
+
+      # Pack the APPX using MakeAppx.exe
+      - name: Pack APPX
+        id: pack
+        shell: powershell
+        run: |
+          # Locate MakeAppx.exe from Windows SDK
+          $makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Recurse -Filter "makeappx.exe" |
+            Where-Object { $_.FullName -like "*x64*" } |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $makeappx) {
+            Write-Error "MakeAppx.exe not found"
+            exit 1
+          }
+          Write-Host "MakeAppx: $makeappx"
+
+          $appxPath = "$env:GITHUB_WORKSPACE\SaveBridge_1.0.0.0_x64.appx"
+
+          & $makeappx pack /d "appx_layout" /p "$appxPath" /overwrite /nv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "APPX created: $appxPath ($($(Get-Item $appxPath).Length) bytes)"
+          echo "appx_path=$appxPath" >> $env:GITHUB_OUTPUT
+
+      # Sign with the dev cert
+      - name: Sign APPX
+        shell: powershell
+        run: |
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
             -Recurse -Filter "signtool.exe" |
             Where-Object { $_.FullName -like "*x64*" } |
             Select-Object -First 1 -ExpandProperty FullName
 
           Write-Host "signtool: $signtool"
-          & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint "$($bundle.FullName)"
-          $exitCode = $LASTEXITCODE
 
-          # Timestamp is optional - ignore failure
-          if ($exitCode -ne 0) {
-            Write-Host "Sign failed with $exitCode"
-            exit $exitCode
+          & $signtool sign /fd SHA256 /sha1 "${{ steps.cert.outputs.thumbprint }}" `
+            "${{ steps.pack.outputs.appx_path }}"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "signtool failed with $LASTEXITCODE"
+            exit $LASTEXITCODE
           }
-
-          echo "bundle_path=$($bundle.FullName)" >> $env:GITHUB_OUTPUT
-          echo "bundle_name=$($bundle.Name)"     >> $env:GITHUB_OUTPUT
-
-      - name: Find any APPX output (fallback)
-        if: success() && steps.sign_appx.outputs.bundle_path == ''
-        id: find_appx
-        shell: powershell
-        run: |
-          $appx = Get-ChildItem -Recurse -Include "*.msixbundle","*.appxbundle","*.appx","*.msix" | Select-Object -First 1
-          if ($appx) {
-            echo "bundle_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
-            echo "bundle_name=$($appx.Name)"     >> $env:GITHUB_OUTPUT
-          }
-
-      # Resolve which path to upload (sign step wins; fallback step is second)
-      - name: Set artifact path
-        if: success()
-        id: artifact_path
-        shell: powershell
-        run: |
-          $p = "${{ steps.sign_appx.outputs.bundle_path }}"
-          if (-not $p) { $p = "${{ steps.find_appx.outputs.bundle_path }}" }
-          if ($p) {
-            echo "path=$p" >> $env:GITHUB_OUTPUT
-            Write-Host "Artifact path: $p"
-          } else {
-            Write-Host "No artifact path found - searching..."
-            $f = Get-ChildItem -Recurse -Include "*.appxbundle","*.msixbundle","*.appx","*.msix" | Select-Object -First 1
-            if ($f) {
-              echo "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
-              Write-Host "Found: $($f.FullName)"
-            }
-          }
+          Write-Host "Signed OK"
 
       - name: Upload APPX artifact
-        if: success() && steps.artifact_path.outputs.path != ''
         uses: actions/upload-artifact@v4
         with:
           name: SaveBridge-APPX
           path: |
-            ${{ steps.artifact_path.outputs.path }}
-            ${{ github.workspace }}\SaveBridge-DevCert.cer
+            ${{ steps.pack.outputs.appx_path }}
+            ${{ steps.cert.outputs.cer_path }}
           retention-days: 30
           if-no-files-found: error
 
       - name: Upload to Release
-        if: github.event_name == 'release' && steps.artifact_path.outputs.path != ''
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.artifact_path.outputs.path }}
-            ${{ github.workspace }}\SaveBridge-DevCert.cer
+            ${{ steps.pack.outputs.appx_path }}
+            ${{ steps.cert.outputs.cer_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
