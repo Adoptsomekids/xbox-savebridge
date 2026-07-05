@@ -122,16 +122,14 @@ jobs:
           $csproj = "$env:GITHUB_WORKSPACE\SaveBridge\SaveBridge\SaveBridge.csproj"
           $content = Get-Content $csproj -Raw
 
-          # Inject the two assemblies the XAML type universe needs:
-          #   System.Runtime.dll           -> fixes WMC1006
-          #   System.Runtime.WindowsRuntime.UI.Xaml.dll -> fixes WMC0003
+          # Inject all System.Runtime.*.dll files from the NUP ref folder.
+          # These are BCL forwarding assemblies needed by the XAML type universe.
+          # We do NOT inject the full BCL (that causes CS5001 entry-point conflicts).
           $refDir = "$pkgDir\ref\uap10.0.15138"
-          $xamlDll = "$refDir\System.Runtime.WindowsRuntime.UI.Xaml.dll"
-          $items  = "    <ReferencePath Include=`"$sysRuntimeDll`" />"
-          if (Test-Path $xamlDll) {
-            $items += "`n    <ReferencePath Include=`"$xamlDll`" />"
-            Write-Host "Also injecting: $xamlDll"
-          }
+          $runtimeDlls = Get-ChildItem $refDir -Filter "System.Runtime*.dll" |
+                         ForEach-Object { $_.FullName }
+          $items = ($runtimeDlls | ForEach-Object { "    <ReferencePath Include=`"$_`" />" }) -join "`n"
+          Write-Host ("Injecting " + $runtimeDlls.Count + " System.Runtime*.dll assemblies")
           $injection = "<ItemGroup>`n$items`n  </ItemGroup>"
 
           $patched = $content -replace '</Project>', "  $injection`n</Project>"
