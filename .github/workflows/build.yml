@@ -8,13 +8,13 @@ on:
       - '.github/workflows/build.yml'
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # allow manual trigger from GitHub UI
+  workflow_dispatch:
   release:
     types: [ created ]
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022  # VS 2022 with UWP workload available
 
     steps:
       - name: Checkout
@@ -23,15 +23,71 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Install UWP workload for Visual Studio
+        shell: powershell
+        run: |
+          # Locate the VS installer
+          $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          if (Test-Path $vsInstaller) {
+            Write-Host "Installing UWP workload..."
+            & $vsInstaller modify `
+              --installPath "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" `
+              --add Microsoft.VisualStudio.Workload.Universal `
+              --quiet --norestart --force 2>&1
+            Write-Host "UWP workload install exit code: $LASTEXITCODE"
+          } else {
+            Write-Host "VS Installer not found at expected path, checking alternatives..."
+            $vsInstaller2 = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+            if (Test-Path $vsInstaller2) {
+              Write-Host "Found at $vsInstaller2"
+            } else {
+              Write-Host "Listing VS paths..."
+              Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\" -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Verify UWP targets exist
+        shell: powershell
+        run: |
+          $paths = @(
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\WindowsXaml",
+            "C:\Program Files (x86)\MSBuild\Microsoft\WindowsXaml",
+            "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\WindowsXaml"
+          )
+          foreach ($p in $paths) {
+            if (Test-Path $p) {
+              Write-Host "Found UWP targets at: $p"
+              Get-ChildItem $p
+            }
+          }
+
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
       - name: Restore NuGet packages
-        run: nuget restore SaveBridge/SaveBridge.sln
-
-      - name: Build APPX (ARM64 — Xbox Series X)
+        shell: powershell
         run: |
-          msbuild SaveBridge/SaveBridge.sln `
+          nuget restore SaveBridge/SaveBridge.sln
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "NuGet restore failed, trying dotnet restore..."
+            dotnet restore SaveBridge/SaveBridge.sln
+          }
+
+      - name: Build APPX (ARM64)
+        shell: powershell
+        run: |
+          # Find MSBuild
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.Component.MSBuild `
+            -find MSBuild\**\Bin\MSBuild.exe
+          
+          if (-not $msbuild) {
+            $msbuild = "msbuild"  # fallback to PATH
+          }
+          
+          Write-Host "Using MSBuild: $msbuild"
+          
+          & $msbuild SaveBridge/SaveBridge.sln `
             /p:Configuration=Release `
             /p:Platform=ARM64 `
             /p:AppxBundle=Always `
@@ -39,24 +95,46 @@ jobs:
             /p:AppxPackageSigningEnabled=false `
             /p:UapAppxPackageBuildMode=SideloadOnly `
             /p:GenerateAppInstallerFile=false `
-            /t:Build
+            /t:Build `
+            /m `
+            /v:minimal
+          
+          Write-Host "Build exit code: $LASTEXITCODE"
+          exit $LASTEXITCODE
 
-      - name: Find APPX output
+      - name: Find and list APPX output
+        if: success()
+        shell: powershell
         id: find_appx
         run: |
           $appx = Get-ChildItem -Recurse -Filter "*.appxbundle" | Select-Object -First 1
-          echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
-          echo "appx_name=$($appx.Name)" >> $env:GITHUB_OUTPUT
+          if ($appx) {
+            Write-Host "Found: $($appx.FullName)"
+            echo "appx_path=$($appx.FullName)" >> $env:GITHUB_OUTPUT
+            echo "appx_name=$($appx.Name)" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No .appxbundle found — checking for .msixbundle..."
+            $msix = Get-ChildItem -Recurse -Filter "*.msixbundle" | Select-Object -First 1
+            if ($msix) {
+              Write-Host "Found MSIX: $($msix.FullName)"
+              echo "appx_path=$($msix.FullName)" >> $env:GITHUB_OUTPUT
+              echo "appx_name=$($msix.Name)" >> $env:GITHUB_OUTPUT
+            } else {
+              Write-Host "Listing all build output..."
+              Get-ChildItem -Recurse -Include "*.appx","*.appxbundle","*.msix","*.msixbundle","*.exe"
+            }
+          }
 
       - name: Upload APPX as artifact
+        if: success() && steps.find_appx.outputs.appx_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: SaveBridge-APPX
           path: ${{ steps.find_appx.outputs.appx_path }}
           retention-days: 30
 
-      - name: Upload to Release (on release event)
-        if: github.event_name == 'release'
+      - name: Upload to Release
+        if: github.event_name == 'release' && steps.find_appx.outputs.appx_path != ''
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.find_appx.outputs.appx_path }}
