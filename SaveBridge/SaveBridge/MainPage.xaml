@@ -16,31 +16,32 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Padding="24,24,24,12" Spacing="4">
+        <StackPanel Grid.Row="0" Padding="24,24,24,12">
             <TextBlock Text="SaveBridge" FontSize="28" FontWeight="SemiBold"/>
-            <TextBlock Text="Dead Island DE — Xbox Connected Storage HTTP bridge" FontSize="14"
+            <TextBlock Text="Dead Island DE — Xbox Save Bridge" FontSize="14" Margin="0,4,0,0"
                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="1" Padding="24,0,24,12" Orientation="Horizontal" Spacing="12">
+        <StackPanel Grid.Row="1" Padding="24,0,24,12" Orientation="Horizontal">
             <Button x:Name="StartButton" Content="Start Server" Click="StartButton_Click" MinWidth="130"/>
-            <Button x:Name="StopButton"  Content="Stop Server"  Click="StopButton_Click"  MinWidth="130" IsEnabled="False"/>
+            <Button x:Name="StopButton"  Content="Stop Server"  Click="StopButton_Click"  MinWidth="130" IsEnabled="False" Margin="12,0,0,0"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="2" Padding="24,0,24,12" Spacing="4">
+        <StackPanel Grid.Row="2" Padding="24,0,24,12">
             <TextBlock x:Name="StatusText" Text="Status: Stopped"
                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
                        FontSize="14" TextWrapping="Wrap"/>
             <TextBlock x:Name="AddressText" Text=""
-                       FontFamily="Consolas" FontSize="13" TextWrapping="Wrap"/>
+                       FontFamily="Consolas" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="3" Padding="24,0,24,24" Spacing="8">
+        <StackPanel Grid.Row="3" Padding="24,0,24,24">
             <TextBlock Text="Log" FontWeight="SemiBold" FontSize="14"/>
             <ScrollViewer x:Name="LogScrollViewer"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           Padding="8"
+                          Margin="0,8,0,0"
                           Background="{ThemeResource SystemControlBackgroundAltHighBrush}">
                 <TextBlock x:Name="LogOutput" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
             </ScrollViewer>
