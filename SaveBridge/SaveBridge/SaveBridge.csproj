@@ -28,7 +28,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <!-- C# 8 required for 'using var' syntax -->
     <LangVersion>8.0</LangVersion>
-    <!-- Required by Microsoft.NETCore.UniversalWindowsPlatform NuGet targets -->
+    <!-- Required by Microsoft.NETCore.UniversalWindowsPlatform NuGet package -->
     <RuntimeIdentifier>win10-arm64</RuntimeIdentifier>
     <RuntimeIdentifiers>win10-arm64</RuntimeIdentifiers>
     <NuGetPackageImportStamp>
@@ -50,11 +50,11 @@
     <Optimize>false</Optimize>
   </PropertyGroup>
 
-  <!-- Microsoft.NETCore.UniversalWindowsPlatform — provides System.Runtime and UWP type universe -->
+  <!-- Use packages.config-style reference for Microsoft.NETCore.UniversalWindowsPlatform.
+       PackageReference for this package triggers the new NuGet.targets RID check which
+       cannot be satisfied by the UAP target framework moniker. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
-      <Version>6.2.14</Version>
-    </PackageReference>
+    <Reference Include="System.Runtime" />
   </ItemGroup>
 
   <ItemGroup>

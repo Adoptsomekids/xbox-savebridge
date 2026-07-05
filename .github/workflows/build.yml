@@ -61,7 +61,8 @@ jobs:
               Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
           }
 
-      # NuGet v5+ is required for PackageReference support in legacy .csproj files
+      # No PackageReference — project uses no external NuGet packages.
+      # System.Runtime and Windows SDK types are provided by the UWP platform SDK.
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
         with:
@@ -70,22 +71,8 @@ jobs:
       - name: Restore NuGet packages
         shell: powershell
         run: |
-          # Use MSBuild /t:Restore so RuntimeIdentifier is passed correctly into project.assets.json
-          # (nuget.exe restore does not pass RID properties, causing NuGet.targets line 198 failure)
-          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-            -latest -requires Microsoft.Component.MSBuild `
-            -find MSBuild\**\Bin\MSBuild.exe
-          if (-not $msbuild) { $msbuild = "msbuild" }
-          Write-Host "Using MSBuild for restore: $msbuild"
-          & $msbuild SaveBridge/SaveBridge.sln `
-            /t:Restore `
-            /p:Configuration=Release `
-            /p:Platform=ARM64 `
-            /p:RuntimeIdentifier=win10-arm64 `
-            /p:RuntimeIdentifiers=win10-arm64 `
-            /v:normal
-          Write-Host "Restore exit code: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "No external packages to restore (UWP SDK types come from the platform)."
+          Write-Host "Skipping restore — no packages.config or PackageReferences."
 
       - name: Build APPX (ARM64)
         shell: powershell
