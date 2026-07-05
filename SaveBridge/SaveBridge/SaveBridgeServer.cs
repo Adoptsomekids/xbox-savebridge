@@ -3,33 +3,26 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
-using Windows.Gaming.XboxLive.Storage;
-using Windows.Networking;
 using Windows.Networking.Sockets;
 using Windows.Storage.Streams;
-using Windows.System;
 
 namespace SaveBridge
 {
     /// <summary>
     /// HTTP bridge server running on Xbox, exposing Dead Island DE
-    /// Connected Storage saves over the local network via StreamSocketListener.
+    /// WGS save files over the local network via StreamSocketListener.
     ///
     /// Endpoints:
     ///   GET  /status
-    ///   GET  /save/list
-    ///   GET  /save/download?container=NAME&amp;blob=BLOBNAME
-    ///   POST /save/upload?container=NAME&amp;blob=BLOBNAME   (body = raw bytes)
-    ///   GET  /wgs/list      — WGS filesystem enumeration (fallback)
-    ///   GET  /wgs/download?path=REL_PATH — raw WGS file download (fallback)
+    ///   GET  /wgs/list      — WGS filesystem enumeration
+    ///   GET  /wgs/download?path=REL_PATH — raw WGS file download
+    ///   POST /wgs/upload?path=REL_PATH   — write WGS file
     /// </summary>
     public sealed class SaveBridgeServer
     {
-        private const string DEAD_ISLAND_SCID = "db860100-d780-4e17-8685-ad130052ea64";
         private const int PORT = 8765;
 
         private StreamSocketListener _listener;
-        private GameSaveProvider _provider;
         private bool _running;
 
         public bool IsRunning => _running;
@@ -42,26 +35,6 @@ namespace SaveBridge
         public async Task StartAsync()
         {
             if (_running) return;
-
-            Log("Acquiring Xbox Live user…");
-            var users = await User.FindAllAsync();
-            if (users.Count == 0)
-                throw new InvalidOperationException("No Xbox Live user signed in.");
-
-            var user = users[0];
-            Log("User: " + user.NonRoamableId);
-
-            Log("Opening GameSaveProvider for SCID " + DEAD_ISLAND_SCID + "…");
-            var result = await GameSaveProvider.GetForUserAsync(user, DEAD_ISLAND_SCID);
-            if (result.Status == GameSaveErrorStatus.Ok)
-            {
-                _provider = result.Value;
-                Log("GameSaveProvider ready.");
-            }
-            else
-            {
-                Log("WARNING: GameSaveProvider failed (" + result.Status + ") — WGS filesystem fallback only.");
-            }
 
             Log("Binding StreamSocketListener on port " + PORT + "…");
             _listener = new StreamSocketListener();
@@ -93,7 +66,7 @@ namespace SaveBridge
             try
             {
                 string requestLine;
-                string body;
+                byte[] bodyBytes;
                 using (var reader = new DataReader(args.Socket.InputStream))
                 {
                     reader.InputStreamOptions = InputStreamOptions.Partial;
@@ -122,14 +95,13 @@ namespace SaveBridge
                     requestLine = rawHead.ToString().Split(new[] { "\r\n" }, StringSplitOptions.None)[0];
 
                     // Read body if any
-                    byte[] bodyBytes = new byte[0];
+                    bodyBytes = new byte[0];
                     if (contentLength > 0)
                     {
                         await reader.LoadAsync(contentLength);
                         bodyBytes = new byte[contentLength];
                         reader.ReadBytes(bodyBytes);
                     }
-                    body = Encoding.UTF8.GetString(bodyBytes);
                     reader.DetachStream();
                 }
 
@@ -150,31 +122,7 @@ namespace SaveBridge
                     if (path == "/status" && method == "GET")
                     {
                         await SendJson(outStream, 200,
-                            "{\"status\":\"ok\",\"scid\":\"" + DEAD_ISLAND_SCID + "\",\"port\":" + PORT
-                            + ",\"provider\":" + (_provider != null ? "true" : "false") + "}");
-                    }
-                    else if (path == "/save/list" && method == "GET")
-                    {
-                        await HandleList(outStream);
-                    }
-                    else if (path == "/save/download" && method == "GET")
-                    {
-                        string container = GetQuery(query, "container");
-                        string blob      = GetQuery(query, "blob");
-                        if (container == "" || blob == "")
-                            await SendJson(outStream, 400, "{\"error\":\"container and blob params required\"}");
-                        else
-                            await HandleDownload(outStream, container, blob);
-                    }
-                    else if (path == "/save/upload" && method == "POST")
-                    {
-                        string container = GetQuery(query, "container");
-                        string blob      = GetQuery(query, "blob");
-                        var bodyArr      = Encoding.UTF8.GetBytes(body); // body already read as bytes above
-                        if (container == "" || blob == "")
-                            await SendJson(outStream, 400, "{\"error\":\"container and blob params required\"}");
-                        else
-                            await HandleUpload(outStream, container, blob, bodyArr);
+                            "{\"status\":\"ok\",\"port\":" + PORT + ",\"build\":\"v8-wgsonly\"}");
                     }
                     else if (path == "/wgs/list" && method == "GET")
                     {
@@ -188,9 +136,17 @@ namespace SaveBridge
                         else
                             await HandleWgsDownload(outStream, relPath);
                     }
+                    else if (path == "/wgs/upload" && method == "POST")
+                    {
+                        string relPath = GetQuery(query, "path");
+                        if (relPath == "" || bodyBytes.Length == 0)
+                            await SendJson(outStream, 400, "{\"error\":\"path param and body required\"}");
+                        else
+                            await HandleWgsUpload(outStream, relPath, bodyBytes);
+                    }
                     else
                     {
-                        await SendJson(outStream, 404, "{\"error\":\"Not found\"}");
+                        await SendJson(outStream, 404, "{\"error\":\"Not found\",\"path\":\"" + Escape(path) + "\"}");
                     }
 
                     await outStream.FlushAsync();
@@ -207,115 +163,10 @@ namespace SaveBridge
         }
 
         // ------------------------------------------------------------------ //
-        //  GameSaveProvider handlers
-        // ------------------------------------------------------------------ //
-
-        private async Task HandleList(IOutputStream outStream)
-        {
-            if (_provider == null)
-            {
-                await SendJson(outStream, 503, "{\"error\":\"GameSaveProvider not available, use /wgs/list\"}");
-                return;
-            }
-
-            var query = _provider.CreateContainerInfoQuery();
-            var infoResult = await query.GetContainerInfoAsync();
-            if (infoResult.Status != GameSaveErrorStatus.Ok)
-            {
-                await SendJson(outStream, 500,
-                    "{\"error\":\"GetContainerInfoAsync failed: " + infoResult.Status + "\"}");
-                return;
-            }
-
-            var sb = new StringBuilder();
-            sb.Append("{\"containers\":[");
-            bool first = true;
-            foreach (var info in infoResult.Value)
-            {
-                if (!first) sb.Append(",");
-                first = false;
-                sb.Append("{\"name\":\"" + Escape(info.Name) + "\""
-                         + ",\"displayName\":\"" + Escape(info.DisplayName) + "\""
-                         + ",\"totalSize\":" + info.TotalSize + "}");
-            }
-            sb.Append("]}");
-            await SendJson(outStream, 200, sb.ToString());
-        }
-
-        private async Task HandleDownload(IOutputStream outStream, string containerName, string blobName)
-        {
-            if (_provider == null)
-            {
-                await SendJson(outStream, 503, "{\"error\":\"GameSaveProvider not available, use /wgs/download\"}");
-                return;
-            }
-
-            var container = _provider.CreateContainer(containerName);
-            var getResult = await container.GetAsync(new[] { blobName });
-            if (getResult.Status != GameSaveErrorStatus.Ok)
-            {
-                await SendJson(outStream, 404,
-                    "{\"error\":\"GetAsync failed: " + getResult.Status + "\"}");
-                return;
-            }
-
-            IBuffer buffer;
-            if (!getResult.Value.TryGetValue(blobName, out buffer) || buffer == null)
-            {
-                await SendJson(outStream, 404, "{\"error\":\"Blob not found in result\"}");
-                return;
-            }
-
-            var bytes = new byte[buffer.Length];
-            var dr = DataReader.FromBuffer(buffer);
-            dr.ReadBytes(bytes);
-
-            await SendBinary(outStream, bytes, blobName);
-            Log("Downloaded " + containerName + "/" + blobName + " (" + bytes.Length + " bytes)");
-        }
-
-        private async Task HandleUpload(IOutputStream outStream, string containerName, string blobName, byte[] bytes)
-        {
-            if (_provider == null)
-            {
-                await SendJson(outStream, 503, "{\"error\":\"GameSaveProvider not available\"}");
-                return;
-            }
-            if (bytes.Length == 0)
-            {
-                await SendJson(outStream, 400, "{\"error\":\"Empty body\"}");
-                return;
-            }
-
-            var writer = new DataWriter();
-            writer.WriteBytes(bytes);
-            var buffer = writer.DetachBuffer();
-
-            var container = _provider.CreateContainer(containerName);
-            var updates = new Dictionary<string, IBuffer> { { blobName, buffer } };
-            var writeResult = await container.SubmitUpdatesAsync(updates, null, "SaveBridge");
-
-            if (writeResult.Status != GameSaveErrorStatus.Ok)
-            {
-                await SendJson(outStream, 500,
-                    "{\"error\":\"SubmitUpdatesAsync failed: " + writeResult.Status + "\"}");
-                return;
-            }
-
-            await SendJson(outStream, 200,
-                "{\"ok\":true,\"bytes\":" + bytes.Length
-                + ",\"blob\":\"" + Escape(containerName + "/" + blobName) + "\"}");
-            Log("Uploaded " + containerName + "/" + blobName + " (" + bytes.Length + " bytes)");
-        }
-
-        // ------------------------------------------------------------------ //
-        //  WGS filesystem fallback handlers
+        //  WGS filesystem handlers
         //
         //  On Xbox the WGS data lives at:
         //    %LOCALAPPDATA%\Packages\<PackageFamilyName>\SystemAppData\wgs\
-        //  Xbox Live Save Exporter uses broadFileSystemAccess to read these
-        //  directly. On Xbox as the game itself, we can read our own
-        //  LocalAppData through Windows.Storage.ApplicationData.
         //
         //  Structure:
         //    wgs\
@@ -335,6 +186,7 @@ namespace SaveBridge
                 var localFolder = Windows.Storage.ApplicationData.Current.LocalFolder;
                 string wgsPath = Path.GetFullPath(Path.Combine(localFolder.Path, "..", "SystemAppData", "wgs"));
 
+                Log("WGS path: " + wgsPath);
                 var result = await WgsReader.EnumerateAsync(wgsPath);
                 await SendJson(outStream, 200, result);
             }
@@ -366,6 +218,37 @@ namespace SaveBridge
 
                 await SendBinary(outStream, bytes, Path.GetFileName(fullPath));
                 Log("WGS download: " + relPath + " (" + bytes.Length + " bytes)");
+            }
+            catch (Exception ex)
+            {
+                await SendJson(outStream, 500, "{\"error\":\"" + Escape(ex.Message) + "\"}");
+            }
+        }
+
+        private async Task HandleWgsUpload(IOutputStream outStream, string relPath, byte[] bytes)
+        {
+            try
+            {
+                var localFolder = Windows.Storage.ApplicationData.Current.LocalFolder;
+                string wgsBase = Path.GetFullPath(Path.Combine(localFolder.Path, "..", "SystemAppData", "wgs"));
+                string fullPath = Path.GetFullPath(Path.Combine(wgsBase, relPath));
+
+                // Safety: must stay inside wgs folder
+                if (!fullPath.StartsWith(wgsBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    await SendJson(outStream, 403, "{\"error\":\"Path traversal denied\"}");
+                    return;
+                }
+
+                // Ensure parent directory exists
+                string dir = Path.GetDirectoryName(fullPath);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+                await Task.Run(() => File.WriteAllBytes(fullPath, bytes));
+
+                await SendJson(outStream, 200,
+                    "{\"ok\":true,\"bytes\":" + bytes.Length + ",\"path\":\"" + Escape(relPath) + "\"}");
+                Log("WGS upload: " + relPath + " (" + bytes.Length + " bytes)");
             }
             catch (Exception ex)
             {
