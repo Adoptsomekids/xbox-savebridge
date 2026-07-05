@@ -24,7 +24,7 @@
 
   <Dependencies>
     <!-- Requires Xbox OS — runs only on Xbox One / Series X in Developer Mode -->
-    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22621.0" />
+    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
   </Dependencies>
 
   <Resources>
