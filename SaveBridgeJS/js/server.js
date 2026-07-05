@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v12: adds /browse?path=ABS and /di/list for Dead Island DE save access
+/// v16: /di/wgs with known DI PFN; GameSaveProvider with timeout fallback
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v11-js loaded. Auto-starting...");
+    log("SaveBridge v16-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge listening on port " + PORT + "  ✓");
+                log("SaveBridge v16 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v10-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v16-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -170,13 +170,20 @@ function dispatch(head, bodyBytes, remote, socket) {
         if (!rp) { sendJson(writer, 400, {error:"path required"}); done(); }
         else { handleDiDownload(writer, rp, done); }
     } else if (path === "/cs/list" && method === "GET") {
-        // Connected Storage (GameSaveProvider) — access Dead Island DE saves directly
+        // Connected Storage (GameSaveProvider) — requires Xbox Live; may fail with 0x80832003
         handleCsList(writer, done);
     } else if (path === "/cs/download" && method === "GET") {
         var container = query["container"] || "";
         var blob      = query["blob"] || "";
         if (!container || !blob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleCsDownload(writer, container, blob, done); }
+    } else if (path === "/di/wgs" && method === "GET") {
+        // Direct filesystem read of DI WGS using known PFN across partition candidates
+        handleDiWgs(writer, done);
+    } else if (path === "/di/wgs/download" && method === "GET") {
+        var wgsPath = query["path"] || "";
+        if (!wgsPath) { sendJson(writer, 400, {error:"path required"}); done(); }
+        else { handleDiWgsDownload(writer, wgsPath, done); }
     } else {
         sendJson(writer, 404, {error:"not found", path:path});
         done();
@@ -297,20 +304,37 @@ var _csProvider = null;
 function getOrOpenProvider(callback) {
     if (_csProvider) { callback(null, _csProvider); return; }
 
+    // Timeout: GameSaveProvider hangs when Xbox Live is offline (0x80832003)
+    var timedOut = false;
+    var timer = setTimeout(function () {
+        timedOut = true;
+        callback("GameSaveProvider timed out — Xbox Live may be offline (check 0x80832003)");
+    }, 8000);
+
     Windows.System.User.findAllAsync().then(function (users) {
         var user = users.size > 0 ? users.getAt(0) : null;
-        if (!user) { callback("No Xbox user found"); return; }
+        if (!user) { if (!timedOut) { clearTimeout(timer); callback("No Xbox user found"); } return; }
 
         Windows.Gaming.XboxLive.Storage.GameSaveProvider.getForUserAsync(user, DI_SCID)
         .then(function (result) {
+            if (timedOut) return;
+            clearTimeout(timer);
             if (result.status === Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok) {
                 _csProvider = result.value;
                 callback(null, _csProvider);
             } else {
                 callback("GameSaveProvider status: " + result.status);
             }
-        }, function (e) { callback(e && e.message ? e.message : String(e)); });
-    }, function (e) { callback(e && e.message ? e.message : String(e)); });
+        }, function (e) {
+            if (timedOut) return;
+            clearTimeout(timer);
+            callback(e && e.message ? e.message : String(e));
+        });
+    }, function (e) {
+        if (timedOut) return;
+        clearTimeout(timer);
+        callback(e && e.message ? e.message : String(e));
+    });
 }
 
 // GET /cs/list — list all containers + blobs via GameSaveProvider
@@ -497,6 +521,99 @@ function handleDiDownload(writer, relPath, done) {
             done();
         }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
     }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
+}
+
+// ── /di/wgs — direct filesystem read of DI WGS using known PFN ───────────────
+// Dead Island DE PFN: DeepSilver.DeadIslandDefinitiveEdition_hmv7qcest37me
+// Try C:\, D:\, Q:\ — retail game lives on C:\ or D:\
+var DI_PFN = "DeepSilver.DeadIslandDefinitiveEdition_hmv7qcest37me";
+var DI_PARTITION_CANDIDATES = ["C", "D", "E", "Q"];
+
+function findDiWgsFolder(callback) {
+    var tried = 0;
+    var found = false;
+    DI_PARTITION_CANDIDATES.forEach(function (drive) {
+        var wgsPath = drive + ":\\Users\\UserMgr2\\AppData\\Local\\Packages\\" + DI_PFN + "\\SystemAppData\\wgs";
+        Windows.Storage.StorageFolder.getFolderFromPathAsync(wgsPath).then(function (folder) {
+            if (!found) {
+                found = true;
+                callback(null, folder, wgsPath);
+            }
+        }, function () {
+            tried++;
+            if (tried === DI_PARTITION_CANDIDATES.length && !found) {
+                // Also try without UserMgr2 (DefaultAccount)
+                var tried2 = 0;
+                var users = ["UserMgr2", "DefaultAccount", "DefaultUser0"];
+                DI_PARTITION_CANDIDATES.forEach(function (drive2) {
+                    users.forEach(function (u) {
+                        var p = drive2 + ":\\Users\\" + u + "\\AppData\\Local\\Packages\\" + DI_PFN + "\\SystemAppData\\wgs";
+                        Windows.Storage.StorageFolder.getFolderFromPathAsync(p).then(function (folder) {
+                            if (!found) { found = true; callback(null, folder, p); }
+                        }, function () {
+                            tried2++;
+                            if (tried2 === DI_PARTITION_CANDIDATES.length * users.length && !found) {
+                                callback("DI WGS not found on any partition. PFN=" + DI_PFN);
+                            }
+                        });
+                    });
+                });
+            }
+        });
+    });
+}
+
+// GET /di/wgs — list containers in DI WGS folder
+function handleDiWgs(writer, done) {
+    log("DI WGS: searching for " + DI_PFN);
+    findDiWgsFolder(function (err, wgsFolder, wgsPath) {
+        if (err) {
+            sendJson(writer, 404, { error: err, pfn: DI_PFN, tried: DI_PARTITION_CANDIDATES });
+            done(); return;
+        }
+        log("DI WGS found: " + wgsPath);
+        var result = { wgsPath: wgsPath, users: [] };
+        wgsFolder.getFoldersAsync().then(function (userFolders) {
+            var pending = userFolders.size;
+            if (pending === 0) { sendJson(writer, 200, result); done(); return; }
+            toArray(userFolders).forEach(function (uf) {
+                var userObj = { xuid: uf.name, containers: [] };
+                result.users.push(userObj);
+                uf.getFoldersAsync().then(function (conFolders) {
+                    var cp = conFolders.size;
+                    if (cp === 0) { if (--pending === 0) { sendJson(writer, 200, result); done(); } return; }
+                    toArray(conFolders).forEach(function (cf) {
+                        var cObj = { guid: cf.name, blobs: [] };
+                        userObj.containers.push(cObj);
+                        cf.getFilesAsync().then(function (blobs) {
+                            toArray(blobs).forEach(function (b) { cObj.blobs.push(b.name); });
+                            if (--cp === 0 && --pending === 0) { sendJson(writer, 200, result); done(); }
+                        }, function () { if (--cp === 0 && --pending === 0) { sendJson(writer, 200, result); done(); } });
+                    });
+                }, function () { if (--pending === 0) { sendJson(writer, 200, result); done(); } });
+            });
+        }, function (e) {
+            sendJson(writer, 500, { error: e && e.message ? e.message : "getFolders failed", wgsPath: wgsPath });
+            done();
+        });
+    });
+}
+
+// GET /di/wgs/download?path=XUID\CONTAINER_GUID\BLOB_FILE
+function handleDiWgsDownload(writer, relPath, done) {
+    log("DI WGS download: " + relPath);
+    findDiWgsFolder(function (err, wgsFolder, wgsPath) {
+        if (err) { sendJson(writer, 404, { error: err }); done(); return; }
+        var fullPath = wgsPath + "\\" + relPath.replace(/\//g, "\\");
+        Windows.Storage.StorageFile.getFileFromPathAsync(fullPath).then(function (file) {
+            return Windows.Storage.FileIO.readBufferAsync(file);
+        }).then(function (buf) {
+            var bytes = new Uint8Array(buf.length);
+            Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+            sendBinary(writer, bytes, relPath.split(/[\\/]/).pop());
+            done();
+        }, function (e) { sendJson(writer, 500, { error: e && e.message ? e.message : "read error", path: fullPath }); done(); });
+    });
 }
 
 // ── HTTP response helpers ────────────────────────────────────────────────────
