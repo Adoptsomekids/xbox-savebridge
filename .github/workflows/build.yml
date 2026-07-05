@@ -73,39 +73,33 @@ jobs:
       - name: Install Microsoft.NETCore.UniversalWindowsPlatform package
         shell: powershell
         run: |
-          $pkgDir = "$env:GITHUB_WORKSPACE\packages"
-          # The offline VS NuGet cache has Microsoft.Net.Native.Compiler and other deps
-          $vsNugetFeed = "C:\Program Files (x86)\Microsoft SDKs\NuGetPackages"
-          Write-Host "Installing Microsoft.NETCore.UniversalWindowsPlatform 6.2.14..."
-          nuget install Microsoft.NETCore.UniversalWindowsPlatform `
-            -Version 6.2.14 `
-            -OutputDirectory $pkgDir `
-            -Source "https://api.nuget.org/v3/index.json" `
-            -Source $vsNugetFeed `
-            -NonInteractive `
-            -DependencyVersion Highest
-          Write-Host "Install exit code: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Standard install failed. Trying with IgnoreDependencies..."
-            nuget install Microsoft.NETCore.UniversalWindowsPlatform `
-              -Version 6.2.14 `
-              -OutputDirectory $pkgDir `
-              -Source "https://api.nuget.org/v3/index.json" `
-              -Source $vsNugetFeed `
-              -NonInteractive
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Microsoft.Net.Native.Compiler is a delisted pre-release dep of NUP 6.2.14.
+          # We skip dependency resolution and download just the NUP nupkg directly,
+          # then expand it into packages/ so the .csproj Import can find its .props.
+          $pkgDir = "$env:GITHUB_WORKSPACE\packages\Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+
+          $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.universalwindowsplatform/6.2.14/microsoft.netcore.universalwindowsplatform.6.2.14.nupkg"
+          $nupkgPath = "$env:TEMP\nup.nupkg"
+          Write-Host "Downloading NUP 6.2.14 nupkg directly..."
+          Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkgPath -UseBasicParsing
+          Write-Host "Download exit: $LASTEXITCODE"
+
+          Write-Host "Expanding nupkg..."
+          Expand-Archive -Path $nupkgPath -DestinationPath $pkgDir -Force
+          Write-Host "Expansion done."
+
+          # Verify the .props and System.Runtime.dll exist
+          $props = Join-Path $pkgDir "build\uap10.0\Microsoft.NETCore.UniversalWindowsPlatform.props"
+          if (Test-Path $props) {
+            Write-Host "Props file found: $props"
+          } else {
+            Write-Host "Props file NOT found. Listing build/:"
+            Get-ChildItem (Join-Path $pkgDir "build") -Recurse | ForEach-Object { Write-Host $_.FullName }
           }
 
-          # Verify package installed
-          $netCorePath = Join-Path $pkgDir "Microsoft.NETCore.UniversalWindowsPlatform.6.2.14"
-          if (Test-Path $netCorePath) {
-            Write-Host "Package installed at: $netCorePath"
-            Get-ChildItem $netCorePath -Recurse -Filter "System.Runtime.dll" |
-              ForEach-Object { Write-Host "System.Runtime.dll: $($_.FullName)" }
-          } else {
-            Write-Host "Package dir not found. Listing packages/:"
-            Get-ChildItem $pkgDir | ForEach-Object { Write-Host $_.Name }
-          }
+          Get-ChildItem $pkgDir -Recurse -Filter "System.Runtime.dll" |
+            ForEach-Object { Write-Host "System.Runtime.dll: $($_.FullName)" }
 
       - name: Build APPX (ARM64)
         shell: powershell
