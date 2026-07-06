@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v23: broadFileSystemAccess + UserDataPaths for DI WGS; /di/userdata endpoint
+/// v27: /cs/atom-file — read DI save atom blobs from WGS filesystem by GUID
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v23-js loaded. Auto-starting...");
+    log("SaveBridge v27-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v23 listening on port " + PORT + "  ✓");
+                log("SaveBridge v27 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,8 +144,26 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v26-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v27-js"});
         done();
+    } else if (path === "/cs/atom-file" && method === "GET") {
+        // Read a DI save blob directly from the WGS filesystem using known GUID
+        // Usage: /cs/atom-file?guid=GUID&xuid=XUID
+        var atomGuid = query["guid"] || "";
+        var atomXuid = query["xuid"] || "2535409375459619";
+        if (!atomGuid) { sendJson(writer, 400, {error:"guid required"}); done(); }
+        else { handleAtomFile(writer, atomGuid, atomXuid, done); }
+    } else if (path === "/cs/atom-http" && method === "GET") {
+        // Download atom via titlestorage.xboxlive.com using caller-provided auth
+        // Usage: /cs/atom-http?guid=GUID&size=N&auth=XBL3.0...&xuid=XUID&scid=SCID&pfn=PFN
+        var ahGuid  = query["guid"]  || "";
+        var ahSize  = parseInt(query["size"] || "0", 10);
+        var ahAuth  = decodeURIComponent(query["auth"]  || "");
+        var ahXuid  = query["xuid"]  || "2535409375459619";
+        var ahScid  = query["scid"]  || DI_SCID;
+        var ahPfn   = decodeURIComponent(query["pfn"]   || DI_PFN_FULL);
+        if (!ahGuid || !ahAuth) { sendJson(writer, 400, {error:"guid+auth required"}); done(); }
+        else { handleAtomHttp(writer, ahGuid, ahSize, ahAuth, ahXuid, ahScid, ahPfn, done); }
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
     } else if (path === "/wgs/download" && method === "GET") {
@@ -324,6 +342,182 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
             sendJson(writer, 500, { error: e && e.message ? e.message : "mkdir error" });
             done();
         });
+    });
+}
+
+// ── /cs/atom-file — read DI save atom from WGS filesystem by GUID ────────────
+// The Xbox stores WGS blobs locally. Each blob is a file named by its GUID.
+// We search the DI WGS folder structure for a file matching the given GUID.
+// This requires broadFileSystemAccess to succeed.
+//
+// DI WGS layout:
+//   Q:\Users\UserMgr2\AppData\Local\Packages\<DI_PFN>\SystemAppData\wgs\
+//   └── <XUID>\
+//       └── <ContainerGuid>\    (or <ContainerGuid>.cntrs)
+//           ├── container.index
+//           └── <BlobGuid>       ← this is what we want
+
+function handleAtomFile(writer, atomGuid, xuid, done) {
+    log("atom-file: GUID=" + atomGuid + " XUID=" + xuid);
+    var DI_PFN_LOCAL = "DeepSilver.DeadIslandDefinitiveEdition_hmv7qcest37me";
+    var drives = ["C", "D", "Q"];
+    var users  = ["UserMgr2", "DefaultAccount", "DefaultUser0"];
+    var found  = false;
+
+    // Build all candidate WGS paths
+    var candidates = [];
+    drives.forEach(function (d) {
+        users.forEach(function (u) {
+            candidates.push(d + ":\\Users\\" + u + "\\AppData\\Local\\Packages\\" +
+                            DI_PFN_LOCAL + "\\SystemAppData\\wgs");
+        });
+    });
+
+    // Also try our own packages sibling (works without broadFileSystemAccess for same user)
+    var ownState = Windows.Storage.ApplicationData.current.localFolder.path;
+    var pkgRoot  = ownState.replace(/\\[^\\]+\\LocalState$/i, "");
+    candidates.push(pkgRoot + "\\" + DI_PFN_LOCAL + "\\SystemAppData\\wgs");
+
+    // Try UserDataPaths
+    try {
+        var udpLocal = Windows.Storage.UserDataPaths.getDefault().localAppData;
+        if (udpLocal) {
+            candidates.push(udpLocal + "\\Packages\\" + DI_PFN_LOCAL + "\\SystemAppData\\wgs");
+        }
+    } catch(e) {}
+
+    var triedPaths = [];
+    var remaining  = candidates.length;
+
+    function tryCandidate(wgsPath) {
+        triedPaths.push(wgsPath);
+        // Look for the blob file: wgsPath\<xuid>\*\<atomGuid>
+        // We don't know the container GUID, so enumerate
+        var xuidPath = wgsPath + "\\" + xuid;
+        Windows.Storage.StorageFolder.getFolderFromPathAsync(xuidPath).then(function (xuidFolder) {
+            return xuidFolder.getFoldersAsync();
+        }).then(function (containerFolders) {
+            var cpending = containerFolders.size;
+            if (cpending === 0) {
+                if (--remaining === 0 && !found) {
+                    sendJson(writer, 404, {error:"atom not found", guid:atomGuid, tried:triedPaths});
+                    done();
+                }
+                return;
+            }
+            toArray(containerFolders).forEach(function (cf) {
+                if (found) { cpending--; return; }
+                // Try to read the blob file with this exact GUID name
+                var blobPath = xuidPath + "\\" + cf.name + "\\" + atomGuid;
+                Windows.Storage.StorageFile.getFileFromPathAsync(blobPath).then(function (file) {
+                    if (found) return;
+                    found = true;
+                    return Windows.Storage.FileIO.readBufferAsync(file);
+                }).then(function (buf) {
+                    if (!buf) return;
+                    var bytes = new Uint8Array(buf.length);
+                    Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+                    log("atom-file: found " + blobPath + " (" + bytes.length + " bytes)");
+                    sendBinary(writer, bytes, atomGuid + ".bin");
+                    done();
+                }, function (e) {
+                    if (--cpending === 0 && --remaining === 0 && !found) {
+                        sendJson(writer, 404, {
+                            error: "atom blob not found in any container",
+                            guid: atomGuid,
+                            lastError: e && e.message ? e.message : String(e),
+                            tried: triedPaths
+                        });
+                        done();
+                    }
+                });
+            });
+        }, function (e) {
+            if (--remaining === 0 && !found) {
+                sendJson(writer, 404, {
+                    error: "xuid folder not found: " + (e && e.message ? e.message : String(e)),
+                    guid: atomGuid, tried: triedPaths
+                });
+                done();
+            }
+        });
+    }
+
+    candidates.forEach(function (p) { tryCandidate(p); });
+}
+
+// ── /cs/atom-http — download DI atom via titlestorage.xboxlive.com ─────────────
+// Uses Windows.Web.Http.HttpClient (WinRT) with the caller-provided XSTS auth.
+// For the POST /atoms/ endpoint (returns SAS URL), we need device+title token.
+// Without that, we try GET on the savedgame manifest and return the atom GUID info.
+function handleAtomHttp(writer, guid, size, auth, xuid, scid, pfn, done) {
+    log("atom-http: GUID=" + guid + " XUID=" + xuid + " SCID=" + scid);
+
+    var filters = new Windows.Web.Http.Filters.HttpBaseProtocolFilter();
+    filters.allowAutoRedirect = true;
+    var client = new Windows.Web.Http.HttpClient(filters);
+
+    // Try POST /atoms/{guid},binary → get blobUri (SAS URL)
+    var atomUrl = "https://titlestorage.xboxlive.com/connectedstorage/users/xuid(" +
+                  xuid + ")/scids/" + scid + "/atoms/" +
+                  encodeURIComponent(guid + ",binary");
+    var bodyStr = JSON.stringify({size: size});
+    var bodyContent = new Windows.Web.Http.HttpStringContent(
+        bodyStr,
+        Windows.Storage.Streams.UnicodeEncoding.utf8,
+        "application/json"
+    );
+
+    var reqMsg = new Windows.Web.Http.HttpRequestMessage(
+        Windows.Web.Http.HttpMethod.post,
+        new Windows.Foundation.Uri(atomUrl)
+    );
+    reqMsg.content = bodyContent;
+    reqMsg.headers.tryAppendWithoutValidation("Authorization", auth);
+    reqMsg.headers.tryAppendWithoutValidation("x-xbl-contract-version", "107");
+    reqMsg.headers.tryAppendWithoutValidation("x-xbl-pfn", pfn);
+
+    client.sendRequestAsync(reqMsg).then(function (resp) {
+        return resp.content.readAsStringAsync().then(function (body) {
+            var status = resp.statusCode;
+            log("atom-http POST status:" + status + " body:" + body.slice(0,100));
+            if (status === 200) {
+                try {
+                    var data = JSON.parse(body);
+                    if (data.blobUri) {
+                        // Download from Azure Blob SAS URL
+                        var sasClient = new Windows.Web.Http.HttpClient();
+                        sasClient.getBufferAsync(new Windows.Foundation.Uri(data.blobUri)).then(function (buf) {
+                            var bytes = new Uint8Array(buf.length);
+                            Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+                            log("atom-http: SAS download " + bytes.length + " bytes");
+                            sendBinary(writer, bytes, guid + ".bin");
+                            done();
+                        }, function (e2) {
+                            sendJson(writer, 500, {error:"SAS download failed: " + (e2&&e2.message?e2.message:String(e2)), sasUrl: data.blobUri.slice(0,80)});
+                            done();
+                        });
+                    } else {
+                        sendJson(writer, 200, {sasResult: data, note:"no blobUri in response"});
+                        done();
+                    }
+                } catch(pe) {
+                    sendJson(writer, 500, {error:"json parse: "+pe.message, body:body.slice(0,200)});
+                    done();
+                }
+            } else {
+                sendJson(writer, 200, {
+                    atomPostStatus: status,
+                    atomPostBody: body.slice(0, 300),
+                    note: "POST /atoms/ returned non-200; device+title token required",
+                    guid: guid
+                });
+                done();
+            }
+        });
+    }, function (e) {
+        sendJson(writer, 500, {error: "HTTP request failed: " + (e&&e.message?e.message:String(e))});
+        done();
     });
 }
 
