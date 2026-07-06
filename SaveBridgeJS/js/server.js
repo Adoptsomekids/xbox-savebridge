@@ -191,6 +191,11 @@ function dispatch(head, bodyBytes, remote, socket) {
         var wdpBlob      = query["blob"] || "";
         if (!wdpContainer || !wdpBlob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleWdpCsDownload(writer, wdpContainer, wdpBlob, done); }
+    } else if (path === "/exec" && method === "POST") {
+        // Execute a command via WScript/Shell — requires broadFileSystemAccess
+        var execCmd = query["cmd"] || "";
+        if (!execCmd) { sendJson(writer, 400, {error:"cmd required"}); done(); }
+        else { handleExec(writer, decodeURIComponent(execCmd), done); }
     } else if (path === "/di/userdata" && method === "GET") {
         // Use UserDataPaths to find the real LocalAppData for the current user
         handleDiUserData(writer, done);
