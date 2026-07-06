@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v20: /probe endpoint to test loopback; WDP proxy with fallback ports
+/// v21: 30s timeout on GameSaveProvider (RETAIL sandbox needs more time to auth)
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v20-js loaded. Auto-starting...");
+    log("SaveBridge v21-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v20 listening on port " + PORT + "  ✓");
+                log("SaveBridge v21 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v20-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v21-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -328,10 +328,10 @@ function getOrOpenProvider(callback) {
         callback(err, val);
     }
 
-    // Hard 10-second master timeout — both API variants can hang indefinitely
+    // 30-second master timeout — RETAIL sandbox needs time to authenticate with Xbox Live servers
     var masterTimer = setTimeout(function () {
-        once("GameSaveProvider timed out (10s). Dev Mode sandbox cannot access retail Xbox Live (0x80832003). Use WDP /ext/xblgamesave instead.");
-    }, 10000);
+        once("GameSaveProvider timed out (30s) — Xbox Live auth is taking too long or unavailable");
+    }, 30000);
 
     Windows.System.User.findAllAsync().then(function (users) {
         var user = users.size > 0 ? users.getAt(0) : null;
