@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v25-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v26-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -170,8 +170,12 @@ function dispatch(head, bodyBytes, remote, socket) {
         if (!rp) { sendJson(writer, 400, {error:"path required"}); done(); }
         else { handleDiDownload(writer, rp, done); }
     } else if (path === "/cs/list" && method === "GET") {
-        // Connected Storage (GameSaveProvider) — requires Xbox Live; may fail with 0x80832003
-        handleCsList(writer, done);
+        // ?scid=OVERRIDE to test a different SCID
+        var scidOverride = query["scid"] || "";
+        handleCsList(writer, scidOverride || DI_SCID, done);
+    } else if (path === "/cs/scan" && method === "GET") {
+        // Scan multiple SCIDs to find which one has containers
+        handleCsScan(writer, done);
     } else if (path === "/cs/download" && method === "GET") {
         var container = query["container"] || "";
         var blob      = query["blob"] || "";
@@ -355,6 +359,41 @@ function handleCsDiag(writer, done) {
     });
 }
 
+// Open a GameSaveProvider for any given SCID (not cached — each call opens fresh)
+function openProviderForScid(scid, callback) {
+    var called = false;
+    function once(err, val) { if (called) return; called = true; clearTimeout(t); callback(err, val); }
+    var t = setTimeout(function () { once("timeout 30s"); }, 30000);
+
+    Windows.System.User.findAllAsync().then(function (users) {
+        var user = null;
+        for (var i = 0; i < users.size; i++) {
+            var u = users.getAt(i);
+            if (u.authenticationStatus === 2) { user = u; break; }
+        }
+        if (!user && users.size > 0) user = users.getAt(0);
+        if (!user) { once("No user"); return; }
+
+        var GSP = Windows.Gaming.XboxLive.Storage.GameSaveProvider;
+        var Ok  = Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok;
+
+        GSP.getSyncOnDemandForUserAsync(user, scid).then(function (r) {
+            if (r.status === Ok) { once(null, r.value); }
+            else {
+                GSP.getForUserAsync(user, scid).then(function (r2) {
+                    if (r2.status === Ok) { once(null, r2.value); }
+                    else { once("status:" + r2.status); }
+                }, function (e) { once(e && e.message ? e.message : String(e)); });
+            }
+        }, function (e) {
+            GSP.getForUserAsync(user, scid).then(function (r2) {
+                if (r2.status === Ok) { once(null, r2.value); }
+                else { once("status:" + r2.status); }
+            }, function (e2) { once(e2 && e2.message ? e2.message : String(e2)); });
+        });
+    }, function (e) { once(e && e.message ? e.message : String(e)); });
+}
+
 // GameSaveProvider — both APIs require an active Xbox Live token even in Dev Mode.
 // We wrap both calls with a shared timeout so /cs/list never hangs.
 // On 0x80832003 (Dev Mode sandbox can't auth as retail user), we return a clear
@@ -434,26 +473,67 @@ function getOrOpenProvider(callback) {
     }, function (e) { once("findAllAsync threw: " + (e && e.message ? e.message : String(e))); });
 }
 
-// GET /cs/list — list all containers + blobs via GameSaveProvider
-function handleCsList(writer, done) {
-    getOrOpenProvider(function (err, provider) {
+// GET /cs/list?scid=SCID — list containers for a specific SCID
+function handleCsList(writer, scid, done) {
+    openProviderForScid(scid, function (err, provider) {
         if (err) {
-            sendJson(writer, 500, { error: err, scid: DI_SCID });
+            sendJson(writer, 500, { error: err, scid: scid });
             done(); return;
         }
-        var query = provider.createContainerInfoQuery();
-        query.getContainerInfoAsync().then(function (result) {
+        var q = provider.createContainerInfoQuery();
+        q.getContainerInfoAsync().then(function (result) {
             if (result.status !== Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok) {
-                sendJson(writer, 500, { error: "getContainerInfo: " + result.status });
+                sendJson(writer, 500, { error: "getContainerInfo: " + result.status, scid: scid });
                 done(); return;
             }
             var containers = [];
             result.value.forEach(function (c) {
                 containers.push({ name: c.name, displayName: c.displayName, totalSize: c.totalSize });
             });
-            sendJson(writer, 200, { scid: DI_SCID, containers: containers });
+            sendJson(writer, 200, { scid: scid, containers: containers });
             done();
-        }, function (e) { sendJson(writer, 500, { error: e.message }); done(); });
+        }, function (e) { sendJson(writer, 500, { error: e.message, scid: scid }); done(); });
+    });
+}
+
+// GET /cs/scan — try all known DI SCIDs to find which has containers
+// Dead Island DE has multiple possible SCIDs across platforms
+var SCID_CANDIDATES = [
+    { label: "DI-DE-XboxOne",   scid: "db860100-d780-4e17-8685-ad130052ea64" },
+    { label: "DI-DE-Universal", scid: "8588294a-2c20-4fad-b027-0fff5c48bcea" },
+    { label: "DI-DE-alt1",      scid: "0c660d26-75f6-4046-be6f-f33159aa1071" },
+    { label: "DI-DE-alt2",      scid: "a2b8b30b-8462-4c62-8ccc-99e621d25037" },
+    { label: "DI-DE-alt3",      scid: "3eb38bc9-425e-47cf-9761-31b5412f7ebc" },
+    { label: "DI-DE-alt4",      scid: "97916778-7748-4cf3-bd1f-f39a7b63769a" },
+    { label: "DI-DE-alt5",      scid: "6c09d827-660b-4870-967f-7f8f9365cc83" },
+    { label: "DI-DE-alt6",      scid: "41b4f21d-ad29-4cc3-bc69-fd0754b573d4" }
+];
+
+function handleCsScan(writer, done) {
+    log("CS scan: trying " + SCID_CANDIDATES.length + " SCIDs");
+    var results = [];
+    var remaining = SCID_CANDIDATES.length;
+
+    SCID_CANDIDATES.forEach(function (candidate) {
+        openProviderForScid(candidate.scid, function (err, provider) {
+            if (err) {
+                results.push({ label: candidate.label, scid: candidate.scid, error: err, containers: 0 });
+                if (--remaining === 0) { sendJson(writer, 200, { scan: results }); done(); }
+                return;
+            }
+            var q = provider.createContainerInfoQuery();
+            q.getContainerInfoAsync().then(function (r) {
+                var n = (r.status === Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok)
+                    ? r.value.size : 0;
+                var containers = [];
+                if (n > 0) r.value.forEach(function(c){ containers.push({name:c.name, displayName:c.displayName, totalSize:c.totalSize}); });
+                results.push({ label: candidate.label, scid: candidate.scid, containers: n, data: containers });
+                if (--remaining === 0) { sendJson(writer, 200, { scan: results }); done(); }
+            }, function (e) {
+                results.push({ label: candidate.label, scid: candidate.scid, error: e.message, containers: 0 });
+                if (--remaining === 0) { sendJson(writer, 200, { scan: results }); done(); }
+            });
+        });
     });
 }
 
