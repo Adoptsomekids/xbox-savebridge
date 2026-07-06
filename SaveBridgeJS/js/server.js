@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v18: 10s master timeout on GameSaveProvider; /wdp/* proxies WDP localhost API
+/// v19: loopbackExempt capability; WDP proxy tries HTTP:11080 then HTTPS:11443
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v18-js loaded. Auto-starting...");
+    log("SaveBridge v19-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v18 listening on port " + PORT + "  ✓");
+                log("SaveBridge v19 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v18-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v19-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -652,20 +652,27 @@ function handleDiWgsDownload(writer, relPath, done) {
 // WDP uses HTTPS with self-signed cert; we use the HTTP port 11080 if available,
 // or bypass SSL errors via the WinRT HttpClient with NoCredentialProtection.
 
-var WDP_HOST    = "https://localhost:11443";
+// WDP has HTTP on 11080 (no auth needed in guest mode) and HTTPS on 11443.
+// Try HTTP first (no SSL to bypass), fall back to HTTPS with cert ignore.
+var WDP_HOSTS   = ["http://localhost:11080", "https://localhost:11443"];
 var DI_SCID_WDP = "db860100-d780-4e17-8685-ad130052ea64";
 
-function wdpGet(urlPath, callback) {
-    // Use WinRT Windows.Web.Http.HttpClient — can ignore SSL cert errors
+function makeWdpClient() {
     var filters = new Windows.Web.Http.Filters.HttpBaseProtocolFilter();
-    filters.ignorableServerCertificateErrors.append(
-        Windows.Security.Cryptography.Certificates.ChainValidationResult.untrusted);
-    filters.ignorableServerCertificateErrors.append(
-        Windows.Security.Cryptography.Certificates.ChainValidationResult.invalidName);
-    filters.ignorableServerCertificateErrors.append(
-        Windows.Security.Cryptography.Certificates.ChainValidationResult.expired);
-    var client = new Windows.Web.Http.HttpClient(filters);
-    var uri = new Windows.Foundation.Uri(WDP_HOST + urlPath);
+    try {
+        filters.ignorableServerCertificateErrors.append(
+            Windows.Security.Cryptography.Certificates.ChainValidationResult.untrusted);
+        filters.ignorableServerCertificateErrors.append(
+            Windows.Security.Cryptography.Certificates.ChainValidationResult.invalidName);
+        filters.ignorableServerCertificateErrors.append(
+            Windows.Security.Cryptography.Certificates.ChainValidationResult.expired);
+    } catch(e) { /* cert ignore not available — proceed anyway */ }
+    return new Windows.Web.Http.HttpClient(filters);
+}
+
+function wdpGetOnHost(host, urlPath, callback) {
+    var client = makeWdpClient();
+    var uri = new Windows.Foundation.Uri(host + urlPath);
     client.getStringAsync(uri).then(function (body) {
         callback(null, body);
     }, function (e) {
@@ -673,9 +680,18 @@ function wdpGet(urlPath, callback) {
     });
 }
 
+function wdpGet(urlPath, callback) {
+    // Try HTTP:11080 first, fall back to HTTPS:11443
+    wdpGetOnHost(WDP_HOSTS[0], urlPath, function (err, body) {
+        if (!err) { callback(null, body); return; }
+        log("WDP HTTP:11080 failed: " + err + " — trying HTTPS:11443");
+        wdpGetOnHost(WDP_HOSTS[1], urlPath, callback);
+    });
+}
+
 // GET /wdp/cs/list — proxy WDP /ext/xblgamesave/containers for DI SCID
 function handleWdpCsList(writer, done) {
-    log("WDP CS list — calling " + WDP_HOST + "/ext/xblgamesave/containers");
+    log("WDP CS list — calling " + WDP_HOSTS[0] + "/ext/xblgamesave/containers");
 
     // First try type=1 (ConnectedStorage), then type=0 (XblGameSave)
     var triedTypes = [];
@@ -714,29 +730,33 @@ function handleWdpCsList(writer, done) {
 
 // GET /wdp/cs/download?container=NAME&blob=BLOB — proxy WDP blob download
 function handleWdpCsDownload(writer, containerName, blobName, done) {
-    var path = "/ext/xblgamesave/blobs?scid=" + DI_SCID_WDP +
-               "&containerName=" + encodeURIComponent(containerName) +
-               "&blobName=" + encodeURIComponent(blobName);
-    log("WDP CS download: " + path);
+    var urlPath = "/ext/xblgamesave/blobs?scid=" + DI_SCID_WDP +
+                  "&containerName=" + encodeURIComponent(containerName) +
+                  "&blobName=" + encodeURIComponent(blobName);
+    log("WDP CS download: " + urlPath);
 
-    var filters = new Windows.Web.Http.Filters.HttpBaseProtocolFilter();
-    filters.ignorableServerCertificateErrors.append(
-        Windows.Security.Cryptography.Certificates.ChainValidationResult.untrusted);
-    filters.ignorableServerCertificateErrors.append(
-        Windows.Security.Cryptography.Certificates.ChainValidationResult.invalidName);
-    filters.ignorableServerCertificateErrors.append(
-        Windows.Security.Cryptography.Certificates.ChainValidationResult.expired);
-    var client = new Windows.Web.Http.HttpClient(filters);
-    var uri = new Windows.Foundation.Uri(WDP_HOST + path);
+    function tryGetBuffer(host, cb) {
+        var client = makeWdpClient();
+        var uri = new Windows.Foundation.Uri(host + urlPath);
+        client.getBufferAsync(uri).then(function (buf) {
+            cb(null, buf);
+        }, function (e) { cb(e && e.message ? e.message : String(e)); });
+    }
 
-    client.getBufferAsync(uri).then(function (buf) {
+    tryGetBuffer(WDP_HOSTS[0], function (err, buf) {
+        if (err) {
+            log("WDP buffer HTTP:11080 failed: " + err + " — trying HTTPS:11443");
+            tryGetBuffer(WDP_HOSTS[1], function (err2, buf2) {
+                if (err2) { sendJson(writer, 500, { error: err2, path: urlPath }); done(); return; }
+                var bytes = new Uint8Array(buf2.length);
+                Windows.Storage.Streams.DataReader.fromBuffer(buf2).readBytes(bytes);
+                sendBinary(writer, bytes, blobName); done();
+            });
+            return;
+        }
         var bytes = new Uint8Array(buf.length);
         Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
-        sendBinary(writer, bytes, blobName);
-        done();
-    }, function (e) {
-        sendJson(writer, 500, { error: e && e.message ? e.message : String(e), path: path });
-        done();
+        sendBinary(writer, bytes, blobName); done();
     });
 }
 
