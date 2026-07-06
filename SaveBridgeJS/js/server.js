@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v19: loopbackExempt capability; WDP proxy tries HTTP:11080 then HTTPS:11443
+/// v20: /probe endpoint to test loopback; WDP proxy with fallback ports
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v19-js loaded. Auto-starting...");
+    log("SaveBridge v20-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v19 listening on port " + PORT + "  ✓");
+                log("SaveBridge v20 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v19-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v20-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -191,6 +191,11 @@ function dispatch(head, bodyBytes, remote, socket) {
         var wdpBlob      = query["blob"] || "";
         if (!wdpContainer || !wdpBlob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleWdpCsDownload(writer, wdpContainer, wdpBlob, done); }
+    } else if (path === "/probe" && method === "GET") {
+        // Connectivity probe: /probe?host=127.0.0.1&port=11443
+        var probeHost = query["host"] || "127.0.0.1";
+        var probePort = query["port"] || "11443";
+        handleProbe(writer, probeHost, probePort, done);
     } else {
         sendJson(writer, 404, {error:"not found", path:path});
         done();
@@ -642,6 +647,32 @@ function handleDiWgsDownload(writer, relPath, done) {
             sendBinary(writer, bytes, relPath.split(/[\\/]/).pop());
             done();
         }, function (e) { sendJson(writer, 500, { error: e && e.message ? e.message : "read error", path: fullPath }); done(); });
+    });
+}
+
+// ── Connectivity probe ────────────────────────────────────────────────────────
+// GET /probe?host=127.0.0.1&port=11443
+// Tests whether this UWP can make outbound TCP connections to the given endpoint.
+function handleProbe(writer, host, port, done) {
+    log("Probe: connecting to " + host + ":" + port);
+    var socket = new Windows.Networking.Sockets.StreamSocket();
+    var hostname = new Windows.Networking.HostName(host);
+    var timer = setTimeout(function () {
+        try { socket.close(); } catch(e) {}
+        sendJson(writer, 200, { host: host, port: port, reachable: false, error: "timeout (5s)" });
+        done();
+    }, 5000);
+
+    socket.connectAsync(hostname, String(port)).then(function () {
+        clearTimeout(timer);
+        try { socket.close(); } catch(e) {}
+        sendJson(writer, 200, { host: host, port: port, reachable: true });
+        done();
+    }, function (e) {
+        clearTimeout(timer);
+        try { socket.close(); } catch(e2) {}
+        sendJson(writer, 200, { host: host, port: port, reachable: false, error: e && e.message ? e.message : String(e) });
+        done();
     });
 }
 
