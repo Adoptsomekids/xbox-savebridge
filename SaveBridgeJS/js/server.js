@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v21: 30s timeout on GameSaveProvider (RETAIL sandbox needs more time to auth)
+/// v22: detailed user logging in GameSaveProvider; /cs/diag for quick user check
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v21-js loaded. Auto-starting...");
+    log("SaveBridge v22-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v21 listening on port " + PORT + "  ✓");
+                log("SaveBridge v22 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v21-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v22-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -191,6 +191,9 @@ function dispatch(head, bodyBytes, remote, socket) {
         var wdpBlob      = query["blob"] || "";
         if (!wdpContainer || !wdpBlob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleWdpCsDownload(writer, wdpContainer, wdpBlob, done); }
+    } else if (path === "/cs/diag" && method === "GET") {
+        // Quick user/sandbox diagnostic — no GameSaveProvider call, returns immediately
+        handleCsDiag(writer, done);
     } else if (path === "/probe" && method === "GET") {
         // Connectivity probe: /probe?host=127.0.0.1&port=11443
         var probeHost = query["host"] || "127.0.0.1";
@@ -313,6 +316,33 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
 var DI_SCID = "db860100-d780-4e17-8685-ad130052ea64";
 var _csProvider = null;
 
+// GET /cs/diag — returns user enumeration info immediately (no GameSaveProvider)
+function handleCsDiag(writer, done) {
+    Windows.System.User.findAllAsync().then(function (users) {
+        var userList = [];
+        for (var i = 0; i < users.size; i++) {
+            var u = users.getAt(i);
+            userList.push({
+                index: i,
+                type: u.type,
+                authenticationStatus: u.authenticationStatus,
+                nonRoamableId: (function(){ try { return u.nonRoamableId; } catch(e){ return null; } })()
+            });
+        }
+        sendJson(writer, 200, {
+            build: "v22-js",
+            scid: DI_SCID,
+            userCount: users.size,
+            users: userList,
+            note: "type 1=LocalUser 2=RemoteUser(XBL) 3=LocalGuest 4=RemoteGuest; authStatus 0=Unauthenticated 1=LocallyAuthenticated 2=RemotelyAuthenticated"
+        });
+        done();
+    }, function (e) {
+        sendJson(writer, 500, { error: e && e.message ? e.message : String(e) });
+        done();
+    });
+}
+
 // GameSaveProvider — both APIs require an active Xbox Live token even in Dev Mode.
 // We wrap both calls with a shared timeout so /cs/list never hangs.
 // On 0x80832003 (Dev Mode sandbox can't auth as retail user), we return a clear
@@ -333,42 +363,63 @@ function getOrOpenProvider(callback) {
         once("GameSaveProvider timed out (30s) — Xbox Live auth is taking too long or unavailable");
     }, 30000);
 
+    // Enumerate all users and log them for diagnostics
     Windows.System.User.findAllAsync().then(function (users) {
-        var user = users.size > 0 ? users.getAt(0) : null;
-        if (!user) { once("No Xbox user found"); return; }
+        var allUsers = [];
+        for (var i = 0; i < users.size; i++) {
+            var u = users.getAt(i);
+            allUsers.push({ type: u.type, authStatus: u.authenticationStatus });
+        }
+        log("findAllAsync: " + users.size + " user(s): " + JSON.stringify(allUsers));
 
-        var GSP     = Windows.Gaming.XboxLive.Storage.GameSaveProvider;
+        // Pick the first authenticated (Xbox Live) user, fall back to first user
+        var user = null;
+        for (var j = 0; j < users.size; j++) {
+            var candidate = users.getAt(j);
+            // type 1 = LocalUser, type 4 = RemoteUser (Xbox Live)
+            if (candidate.type === 4 || candidate.authenticationStatus === 1) {
+                user = candidate; break;
+            }
+        }
+        if (!user && users.size > 0) user = users.getAt(0);
+        if (!user) { once("No Xbox user found"); return; }
+        log("Using user type=" + user.type + " authStatus=" + user.authenticationStatus);
+
+        var GSP      = Windows.Gaming.XboxLive.Storage.GameSaveProvider;
         var StatusOk = Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok;
 
-        // Try SyncOnDemand (prefers local cache) — still needs Xbox Live in Dev Mode
+        // Try SyncOnDemand first, then getForUserAsync
         GSP.getSyncOnDemandForUserAsync(user, DI_SCID).then(function (result) {
+            log("SyncOnDemand result status: " + result.status);
             if (result.status === StatusOk) {
                 _csProvider = result.value;
                 once(null, _csProvider);
             } else {
-                log("SyncOnDemand status: " + result.status + " — trying getForUserAsync");
+                log("SyncOnDemand status " + result.status + " — trying getForUserAsync");
                 GSP.getForUserAsync(user, DI_SCID).then(function (r2) {
+                    log("getForUserAsync result status: " + r2.status);
                     if (r2.status === StatusOk) {
                         _csProvider = r2.value;
                         once(null, _csProvider);
                     } else {
-                        once("getForUserAsync status: " + r2.status + " (0x80832003 = Dev Mode sandbox blocks retail Xbox Live auth)");
+                        once("GameSaveProvider both failed — SyncOnDemand:" + result.status + " getForUser:" + r2.status);
                     }
-                }, function (e2) { once(e2 && e2.message ? e2.message : String(e2)); });
+                }, function (e2) { once("getForUserAsync threw: " + (e2 && e2.message ? e2.message : String(e2))); });
             }
         }, function (e) {
-            log("SyncOnDemand error: " + (e && e.message ? e.message : String(e)) + " — trying getForUserAsync");
+            log("SyncOnDemand threw: " + (e && e.message ? e.message : String(e)));
             GSP.getForUserAsync(user, DI_SCID).then(function (r2) {
+                log("getForUserAsync result status: " + r2.status);
                 if (r2.status === StatusOk) {
                     _csProvider = r2.value;
                     once(null, _csProvider);
                 } else {
                     once("getForUserAsync status: " + r2.status);
                 }
-            }, function (e2) { once(e2 && e2.message ? e2.message : String(e2)); });
+            }, function (e2) { once("getForUserAsync threw: " + (e2 && e2.message ? e2.message : String(e2))); });
         });
 
-    }, function (e) { once(e && e.message ? e.message : String(e)); });
+    }, function (e) { once("findAllAsync threw: " + (e && e.message ? e.message : String(e))); });
 }
 
 // GET /cs/list — list all containers + blobs via GameSaveProvider
