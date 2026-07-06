@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v22: detailed user logging in GameSaveProvider; /cs/diag for quick user check
+/// v23: broadFileSystemAccess + UserDataPaths for DI WGS; /di/userdata endpoint
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v22-js loaded. Auto-starting...");
+    log("SaveBridge v23-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v22 listening on port " + PORT + "  ✓");
+                log("SaveBridge v23 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v22-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v23-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -191,6 +191,13 @@ function dispatch(head, bodyBytes, remote, socket) {
         var wdpBlob      = query["blob"] || "";
         if (!wdpContainer || !wdpBlob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleWdpCsDownload(writer, wdpContainer, wdpBlob, done); }
+    } else if (path === "/di/userdata" && method === "GET") {
+        // Use UserDataPaths to find the real LocalAppData for the current user
+        handleDiUserData(writer, done);
+    } else if (path === "/di/userdata/download" && method === "GET") {
+        var udPath = query["path"] || "";
+        if (!udPath) { sendJson(writer, 400, {error:"path required"}); done(); }
+        else { handleDiUserDataDownload(writer, udPath, done); }
     } else if (path === "/cs/diag" && method === "GET") {
         // Quick user/sandbox diagnostic — no GameSaveProvider call, returns immediately
         handleCsDiag(writer, done);
@@ -606,6 +613,113 @@ function handleDiDownload(writer, relPath, done) {
             done();
         }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
     }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
+}
+
+// ── /di/userdata — UserDataPaths-based DI WGS access ────────────────────────
+// Uses Windows.Storage.UserDataPaths.GetDefault().localAppData to find the
+// actual user's LocalAppData, then navigates to DI's WGS folder from there.
+// broadFileSystemAccess capability required.
+
+var DI_PFN_FULL = "DeepSilver.DeadIslandDefinitiveEdition_hmv7qcest37me";
+
+function handleDiUserData(writer, done) {
+    // Method 1: UserDataPaths (gets the currently signed-in user's LocalAppData)
+    var localAppData;
+    try {
+        localAppData = Windows.Storage.UserDataPaths.getDefault().localAppData;
+    } catch (e) {
+        localAppData = null;
+        log("UserDataPaths.getDefault() error: " + (e && e.message ? e.message : String(e)));
+    }
+
+    // Method 2: our own app path → up to Packages → sibling DI package
+    var ownLocalState = Windows.Storage.ApplicationData.current.localFolder.path;
+    var packagesPath  = ownLocalState.replace(/\\[^\\]+\\LocalState$/i, "");
+    var diWgsFromOwn  = packagesPath + "\\" + DI_PFN_FULL + "\\SystemAppData\\wgs";
+
+    var diWgsFromUDP  = localAppData
+        ? localAppData + "\\Packages\\" + DI_PFN_FULL + "\\SystemAppData\\wgs"
+        : null;
+
+    log("UserDataPaths.localAppData: " + (localAppData || "(unavailable)"));
+    log("Own packages path: " + packagesPath);
+    log("DI WGS (UDP):  " + diWgsFromUDP);
+    log("DI WGS (own):  " + diWgsFromOwn);
+
+    var results = {
+        userDataPathsLocalAppData: localAppData || null,
+        ownLocalState: ownLocalState,
+        packagesPath: packagesPath,
+        diPfn: DI_PFN_FULL,
+        diWgsPaths: {},
+        wgsContents: null
+    };
+
+    // Try to open the DI WGS folder using each candidate path
+    var candidates = [];
+    if (diWgsFromUDP) candidates.push({ label: "UDP", path: diWgsFromUDP });
+    candidates.push({ label: "own", path: diWgsFromOwn });
+
+    // Also try broadFileSystemAccess to navigate DI's own LocalAppData
+    var diLocalAppData = localAppData
+        ? localAppData + "\\Packages\\" + DI_PFN_FULL + "\\LocalState"
+        : null;
+    if (diLocalAppData) candidates.push({ label: "diLocalState", path: diLocalAppData });
+
+    var remaining = candidates.length;
+    var found = false;
+
+    function tryCandidate(c) {
+        Windows.Storage.StorageFolder.getFolderFromPathAsync(c.path).then(function (folder) {
+            results.diWgsPaths[c.label] = { path: c.path, accessible: true };
+            if (!found) {
+                found = true;
+                // Enumerate its contents
+                folder.getFoldersAsync().then(function (subFolders) {
+                    results.wgsContents = { path: c.path, label: c.label, subFolders: [] };
+                    toArray(subFolders).forEach(function(sf) {
+                        results.wgsContents.subFolders.push(sf.name);
+                    });
+                    if (--remaining === 0) { sendJson(writer, 200, results); done(); }
+                }, function() { if (--remaining === 0) { sendJson(writer, 200, results); done(); } });
+            } else {
+                if (--remaining === 0) { sendJson(writer, 200, results); done(); }
+            }
+        }, function (e) {
+            results.diWgsPaths[c.label] = { path: c.path, accessible: false, error: e && e.message ? e.message : String(e) };
+            if (--remaining === 0) { sendJson(writer, 200, results); done(); }
+        });
+    }
+
+    candidates.forEach(tryCandidate);
+}
+
+function handleDiUserDataDownload(writer, relPath, done) {
+    // relPath is relative to the accessible DI WGS path
+    var localAppData;
+    try { localAppData = Windows.Storage.UserDataPaths.getDefault().localAppData; } catch(e) { localAppData = null; }
+    var packagesPath = Windows.Storage.ApplicationData.current.localFolder.path
+                        .replace(/\\[^\\]+\\LocalState$/i, "");
+
+    var paths = [];
+    if (localAppData) paths.push(localAppData + "\\Packages\\" + DI_PFN_FULL + "\\SystemAppData\\wgs\\" + relPath.replace(/\//g,"\\"));
+    paths.push(packagesPath + "\\" + DI_PFN_FULL + "\\SystemAppData\\wgs\\" + relPath.replace(/\//g,"\\"));
+
+    var tried = 0;
+    function tryPath(p) {
+        Windows.Storage.StorageFile.getFileFromPathAsync(p).then(function(file) {
+            return Windows.Storage.FileIO.readBufferAsync(file);
+        }).then(function(buf) {
+            var bytes = new Uint8Array(buf.length);
+            Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+            sendBinary(writer, bytes, relPath.split(/[\\/]/).pop()); done();
+        }, function(e) {
+            tried++;
+            if (tried < paths.length) { tryPath(paths[tried]); return; }
+            sendJson(writer, 500, { error: e && e.message ? e.message : String(e), tried: paths }); done();
+        });
+    }
+    tryPath(paths[0]);
 }
 
 // ── /di/wgs — direct filesystem read of DI WGS using known PFN ───────────────
