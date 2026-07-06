@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v16: /di/wgs with known DI PFN; GameSaveProvider with timeout fallback
+/// v17: getSyncOnDemandForUserAsync (offline-safe) → fallback getForUserAsync
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v16-js loaded. Auto-starting...");
+    log("SaveBridge v17-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v16 listening on port " + PORT + "  ✓");
+                log("SaveBridge v17 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v16-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v17-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -301,38 +301,59 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
 var DI_SCID = "db860100-d780-4e17-8685-ad130052ea64";
 var _csProvider = null;
 
+// Try getSyncOnDemandForUserAsync first (offline-safe, reads local cache).
+// If that fails / returns non-ok, fall back to getForUserAsync (needs Xbox Live).
+// 0x80832003 = Xbox Live sign-in required by the online path → use SyncOnDemand.
 function getOrOpenProvider(callback) {
     if (_csProvider) { callback(null, _csProvider); return; }
 
-    // Timeout: GameSaveProvider hangs when Xbox Live is offline (0x80832003)
-    var timedOut = false;
-    var timer = setTimeout(function () {
-        timedOut = true;
-        callback("GameSaveProvider timed out — Xbox Live may be offline (check 0x80832003)");
-    }, 8000);
-
     Windows.System.User.findAllAsync().then(function (users) {
         var user = users.size > 0 ? users.getAt(0) : null;
-        if (!user) { if (!timedOut) { clearTimeout(timer); callback("No Xbox user found"); } return; }
+        if (!user) { callback("No Xbox user found"); return; }
 
-        Windows.Gaming.XboxLive.Storage.GameSaveProvider.getForUserAsync(user, DI_SCID)
-        .then(function (result) {
-            if (timedOut) return;
-            clearTimeout(timer);
-            if (result.status === Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok) {
+        var GSP = Windows.Gaming.XboxLive.Storage.GameSaveProvider;
+        var StatusOk = Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok;
+
+        // ── Path 1: getSyncOnDemandForUserAsync (no Xbox Live required) ──
+        var tryOnline = function () {
+            var timedOut = false;
+            var timer = setTimeout(function () {
+                timedOut = true;
+                callback("GameSaveProvider (online) timed out — Xbox Live unavailable (0x80832003)");
+            }, 8000);
+
+            GSP.getForUserAsync(user, DI_SCID).then(function (result) {
+                if (timedOut) return;
+                clearTimeout(timer);
+                if (result.status === StatusOk) {
+                    _csProvider = result.value;
+                    callback(null, _csProvider);
+                } else {
+                    callback("getForUserAsync status: " + result.status);
+                }
+            }, function (e) {
+                if (timedOut) return;
+                clearTimeout(timer);
+                callback(e && e.message ? e.message : String(e));
+            });
+        };
+
+        GSP.getSyncOnDemandForUserAsync(user, DI_SCID).then(function (result) {
+            if (result.status === StatusOk) {
                 _csProvider = result.value;
                 callback(null, _csProvider);
             } else {
-                callback("GameSaveProvider status: " + result.status);
+                // SyncOnDemand failed — try the online path
+                log("getSyncOnDemandForUserAsync status " + result.status + " — trying online path");
+                tryOnline();
             }
         }, function (e) {
-            if (timedOut) return;
-            clearTimeout(timer);
-            callback(e && e.message ? e.message : String(e));
+            // SyncOnDemand threw — try the online path
+            log("getSyncOnDemandForUserAsync error: " + (e && e.message ? e.message : String(e)) + " — trying online path");
+            tryOnline();
         });
+
     }, function (e) {
-        if (timedOut) return;
-        clearTimeout(timer);
         callback(e && e.message ? e.message : String(e));
     });
 }
