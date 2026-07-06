@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v23-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v25-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -619,6 +619,34 @@ function handleDiDownload(writer, relPath, done) {
         }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
     }, function (e) { sendJson(writer, 500, {error:e.message}); done(); });
 }
+
+// ── /exec — run a command via ProcessLauncher (runFullTrust UWP API) ─────────
+// POST /exec?cmd=URL_ENCODED_COMMAND
+function handleExec(writer, cmd, done) {
+    log("exec: " + cmd);
+    var result = { cmd: cmd, attempts: {} };
+    var responded = false;
+    function respond() { if (responded) return; responded = true; clearTimeout(t); sendJson(writer, 200, result); done(); }
+    var t = setTimeout(respond, 5000);
+
+    try {
+        var parts = cmd.match(/^("(?:[^"]+)"|\S+)\s*(.*)?$/) || [];
+        var exe   = (parts[1] || cmd).replace(/"/g, "");
+        var args  = parts[2] || "";
+        var opts  = new Windows.System.ProcessLauncherOptions();
+        Windows.System.ProcessLauncher.runToCompletionAsync(exe, args, opts).then(function (r) {
+            result.attempts.processLauncher = { exitCode: r && r.exitCode };
+            respond();
+        }, function (e) {
+            result.attempts.processLauncher = e && e.message ? e.message : String(e);
+            respond();
+        });
+    } catch (e) {
+        result.attempts.processLauncher = e && e.message ? e.message : String(e);
+        respond();
+    }
+}
+
 
 // ── /di/userdata — UserDataPaths-based DI WGS access ────────────────────────
 // Uses Windows.Storage.UserDataPaths.GetDefault().localAppData to find the

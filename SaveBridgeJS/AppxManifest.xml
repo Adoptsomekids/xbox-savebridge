@@ -51,6 +51,7 @@
     <Capability Name="internetClient" />
     <Capability Name="privateNetworkClientServer" />
     <rescap:Capability Name="broadFileSystemAccess" />
+    <rescap:Capability Name="runFullTrust" />
     <xbox:Capability Name="connectedStorageAccess" />
   </Capabilities>
 
