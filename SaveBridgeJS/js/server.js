@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v17: getSyncOnDemandForUserAsync (offline-safe) → fallback getForUserAsync
+/// v18: 10s master timeout on GameSaveProvider; /wdp/* proxies WDP localhost API
 "use strict";
 
 var PORT     = 8765;
@@ -23,7 +23,7 @@ function setAddr(msg) { document.getElementById("addr").textContent = msg; }
 
 // ── Auto-start on load ──────────────────────────────────────────────────────
 window.addEventListener("load", function () {
-    log("SaveBridge v17-js loaded. Auto-starting...");
+    log("SaveBridge v18-js loaded. Auto-starting...");
     setTimeout(startServer, 500);
 });
 
@@ -45,7 +45,7 @@ function startServer() {
                 document.getElementById("btnStop").disabled = false;
                 setStatus("Running — port " + PORT, "#81c784");
                 setAddr("http://<xbox-ip>:" + PORT + "/status");
-                log("SaveBridge v17 listening on port " + PORT + "  ✓");
+                log("SaveBridge v18 listening on port " + PORT + "  ✓");
             },
             function (err) {
                 var msg = err && err.message ? err.message : String(err);
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v17-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v18-js"});
         done();
     } else if (path === "/wgs/list" && method === "GET") {
         handleWgsList(writer, done);
@@ -178,12 +178,19 @@ function dispatch(head, bodyBytes, remote, socket) {
         if (!container || !blob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleCsDownload(writer, container, blob, done); }
     } else if (path === "/di/wgs" && method === "GET") {
-        // Direct filesystem read of DI WGS using known PFN across partition candidates
         handleDiWgs(writer, done);
     } else if (path === "/di/wgs/download" && method === "GET") {
         var wgsPath = query["path"] || "";
         if (!wgsPath) { sendJson(writer, 400, {error:"path required"}); done(); }
         else { handleDiWgsDownload(writer, wgsPath, done); }
+    } else if (path === "/wdp/cs/list" && method === "GET") {
+        // Proxy WDP /ext/xblgamesave/containers — WDP runs privileged, can reach retail saves
+        handleWdpCsList(writer, done);
+    } else if (path === "/wdp/cs/download" && method === "GET") {
+        var wdpContainer = query["container"] || "";
+        var wdpBlob      = query["blob"] || "";
+        if (!wdpContainer || !wdpBlob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
+        else { handleWdpCsDownload(writer, wdpContainer, wdpBlob, done); }
     } else {
         sendJson(writer, 404, {error:"not found", path:path});
         done();
@@ -301,61 +308,62 @@ function handleWgsUpload(writer, relPath, bodyBytes, done) {
 var DI_SCID = "db860100-d780-4e17-8685-ad130052ea64";
 var _csProvider = null;
 
-// Try getSyncOnDemandForUserAsync first (offline-safe, reads local cache).
-// If that fails / returns non-ok, fall back to getForUserAsync (needs Xbox Live).
-// 0x80832003 = Xbox Live sign-in required by the online path → use SyncOnDemand.
+// GameSaveProvider — both APIs require an active Xbox Live token even in Dev Mode.
+// We wrap both calls with a shared timeout so /cs/list never hangs.
+// On 0x80832003 (Dev Mode sandbox can't auth as retail user), we return a clear
+// diagnostic so the caller can try the WDP /ext/xblgamesave path instead.
 function getOrOpenProvider(callback) {
     if (_csProvider) { callback(null, _csProvider); return; }
 
+    var called = false;
+    function once(err, val) {
+        if (called) return;
+        called = true;
+        clearTimeout(masterTimer);
+        callback(err, val);
+    }
+
+    // Hard 10-second master timeout — both API variants can hang indefinitely
+    var masterTimer = setTimeout(function () {
+        once("GameSaveProvider timed out (10s). Dev Mode sandbox cannot access retail Xbox Live (0x80832003). Use WDP /ext/xblgamesave instead.");
+    }, 10000);
+
     Windows.System.User.findAllAsync().then(function (users) {
         var user = users.size > 0 ? users.getAt(0) : null;
-        if (!user) { callback("No Xbox user found"); return; }
+        if (!user) { once("No Xbox user found"); return; }
 
-        var GSP = Windows.Gaming.XboxLive.Storage.GameSaveProvider;
+        var GSP     = Windows.Gaming.XboxLive.Storage.GameSaveProvider;
         var StatusOk = Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok;
 
-        // ── Path 1: getSyncOnDemandForUserAsync (no Xbox Live required) ──
-        var tryOnline = function () {
-            var timedOut = false;
-            var timer = setTimeout(function () {
-                timedOut = true;
-                callback("GameSaveProvider (online) timed out — Xbox Live unavailable (0x80832003)");
-            }, 8000);
-
-            GSP.getForUserAsync(user, DI_SCID).then(function (result) {
-                if (timedOut) return;
-                clearTimeout(timer);
-                if (result.status === StatusOk) {
-                    _csProvider = result.value;
-                    callback(null, _csProvider);
-                } else {
-                    callback("getForUserAsync status: " + result.status);
-                }
-            }, function (e) {
-                if (timedOut) return;
-                clearTimeout(timer);
-                callback(e && e.message ? e.message : String(e));
-            });
-        };
-
+        // Try SyncOnDemand (prefers local cache) — still needs Xbox Live in Dev Mode
         GSP.getSyncOnDemandForUserAsync(user, DI_SCID).then(function (result) {
             if (result.status === StatusOk) {
                 _csProvider = result.value;
-                callback(null, _csProvider);
+                once(null, _csProvider);
             } else {
-                // SyncOnDemand failed — try the online path
-                log("getSyncOnDemandForUserAsync status " + result.status + " — trying online path");
-                tryOnline();
+                log("SyncOnDemand status: " + result.status + " — trying getForUserAsync");
+                GSP.getForUserAsync(user, DI_SCID).then(function (r2) {
+                    if (r2.status === StatusOk) {
+                        _csProvider = r2.value;
+                        once(null, _csProvider);
+                    } else {
+                        once("getForUserAsync status: " + r2.status + " (0x80832003 = Dev Mode sandbox blocks retail Xbox Live auth)");
+                    }
+                }, function (e2) { once(e2 && e2.message ? e2.message : String(e2)); });
             }
         }, function (e) {
-            // SyncOnDemand threw — try the online path
-            log("getSyncOnDemandForUserAsync error: " + (e && e.message ? e.message : String(e)) + " — trying online path");
-            tryOnline();
+            log("SyncOnDemand error: " + (e && e.message ? e.message : String(e)) + " — trying getForUserAsync");
+            GSP.getForUserAsync(user, DI_SCID).then(function (r2) {
+                if (r2.status === StatusOk) {
+                    _csProvider = r2.value;
+                    once(null, _csProvider);
+                } else {
+                    once("getForUserAsync status: " + r2.status);
+                }
+            }, function (e2) { once(e2 && e2.message ? e2.message : String(e2)); });
         });
 
-    }, function (e) {
-        callback(e && e.message ? e.message : String(e));
-    });
+    }, function (e) { once(e && e.message ? e.message : String(e)); });
 }
 
 // GET /cs/list — list all containers + blobs via GameSaveProvider
@@ -634,6 +642,101 @@ function handleDiWgsDownload(writer, relPath, done) {
             sendBinary(writer, bytes, relPath.split(/[\\/]/).pop());
             done();
         }, function (e) { sendJson(writer, 500, { error: e && e.message ? e.message : "read error", path: fullPath }); done(); });
+    });
+}
+
+// ── WDP proxy handlers — /wdp/cs/list and /wdp/cs/download ──────────────────
+// WDP (Windows Device Portal) runs as a privileged OS service on port 11443.
+// Its /ext/xblgamesave endpoint can access retail game saves across partitions.
+// We call it via XMLHttpRequest from within the UWP (same machine = localhost).
+// WDP uses HTTPS with self-signed cert; we use the HTTP port 11080 if available,
+// or bypass SSL errors via the WinRT HttpClient with NoCredentialProtection.
+
+var WDP_HOST    = "https://localhost:11443";
+var DI_SCID_WDP = "db860100-d780-4e17-8685-ad130052ea64";
+
+function wdpGet(urlPath, callback) {
+    // Use WinRT Windows.Web.Http.HttpClient — can ignore SSL cert errors
+    var filters = new Windows.Web.Http.Filters.HttpBaseProtocolFilter();
+    filters.ignorableServerCertificateErrors.append(
+        Windows.Security.Cryptography.Certificates.ChainValidationResult.untrusted);
+    filters.ignorableServerCertificateErrors.append(
+        Windows.Security.Cryptography.Certificates.ChainValidationResult.invalidName);
+    filters.ignorableServerCertificateErrors.append(
+        Windows.Security.Cryptography.Certificates.ChainValidationResult.expired);
+    var client = new Windows.Web.Http.HttpClient(filters);
+    var uri = new Windows.Foundation.Uri(WDP_HOST + urlPath);
+    client.getStringAsync(uri).then(function (body) {
+        callback(null, body);
+    }, function (e) {
+        callback(e && e.message ? e.message : String(e));
+    });
+}
+
+// GET /wdp/cs/list — proxy WDP /ext/xblgamesave/containers for DI SCID
+function handleWdpCsList(writer, done) {
+    log("WDP CS list — calling " + WDP_HOST + "/ext/xblgamesave/containers");
+
+    // First try type=1 (ConnectedStorage), then type=0 (XblGameSave)
+    var triedTypes = [];
+    var results = {};
+
+    function tryType(t, next) {
+        var path = "/ext/xblgamesave/containers?scid=" + DI_SCID_WDP + "&type=" + t;
+        wdpGet(path, function (err, body) {
+            if (err) {
+                results["type" + t] = { error: err };
+            } else {
+                try { results["type" + t] = JSON.parse(body); }
+                catch (pe) { results["type" + t] = { raw: body.slice(0, 500) }; }
+            }
+            next();
+        });
+    }
+
+    tryType(0, function () {
+        tryType(1, function () {
+            // Also probe without type param
+            wdpGet("/ext/xblgamesave/containers?scid=" + DI_SCID_WDP, function (err, body) {
+                var noType = err ? { error: err } : (function () { try { return JSON.parse(body); } catch(e) { return {raw:body.slice(0,500)}; } })();
+                sendJson(writer, 200, {
+                    wdpHost: WDP_HOST,
+                    scid: DI_SCID_WDP,
+                    type0: results["type0"],
+                    type1: results["type1"],
+                    noType: noType
+                });
+                done();
+            });
+        });
+    });
+}
+
+// GET /wdp/cs/download?container=NAME&blob=BLOB — proxy WDP blob download
+function handleWdpCsDownload(writer, containerName, blobName, done) {
+    var path = "/ext/xblgamesave/blobs?scid=" + DI_SCID_WDP +
+               "&containerName=" + encodeURIComponent(containerName) +
+               "&blobName=" + encodeURIComponent(blobName);
+    log("WDP CS download: " + path);
+
+    var filters = new Windows.Web.Http.Filters.HttpBaseProtocolFilter();
+    filters.ignorableServerCertificateErrors.append(
+        Windows.Security.Cryptography.Certificates.ChainValidationResult.untrusted);
+    filters.ignorableServerCertificateErrors.append(
+        Windows.Security.Cryptography.Certificates.ChainValidationResult.invalidName);
+    filters.ignorableServerCertificateErrors.append(
+        Windows.Security.Cryptography.Certificates.ChainValidationResult.expired);
+    var client = new Windows.Web.Http.HttpClient(filters);
+    var uri = new Windows.Foundation.Uri(WDP_HOST + path);
+
+    client.getBufferAsync(uri).then(function (buf) {
+        var bytes = new Uint8Array(buf.length);
+        Windows.Storage.Streams.DataReader.fromBuffer(buf).readBytes(bytes);
+        sendBinary(writer, bytes, blobName);
+        done();
+    }, function (e) {
+        sendJson(writer, 500, { error: e && e.message ? e.message : String(e), path: path });
+        done();
     });
 }
 
