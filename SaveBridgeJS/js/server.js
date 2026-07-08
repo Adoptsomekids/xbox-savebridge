@@ -1,6 +1,6 @@
 /// SaveBridge JS UWP — StreamSocketListener HTTP bridge, port 8765
 /// Uses only native WinRT async (no WinJS dependency)
-/// v27: /cs/atom-file — read DI save atom blobs from WGS filesystem by GUID
+/// v28: /cs/upload — write blob to DI Connected Storage via GameSaveProvider.SubmitUpdatesAsync
 "use strict";
 
 var PORT     = 8765;
@@ -144,7 +144,7 @@ function dispatch(head, bodyBytes, remote, socket) {
     }
 
     if (path === "/status" && method === "GET") {
-        sendJson(writer, 200, {status:"ok", port:PORT, build:"v27-js"});
+        sendJson(writer, 200, {status:"ok", port:PORT, build:"v28-js"});
         done();
     } else if (path === "/cs/atom-file" && method === "GET") {
         // Read a DI save blob directly from the WGS filesystem using known GUID
@@ -199,6 +199,17 @@ function dispatch(head, bodyBytes, remote, socket) {
         var blob      = query["blob"] || "";
         if (!container || !blob) { sendJson(writer, 400, {error:"container+blob required"}); done(); }
         else { handleCsDownload(writer, container, blob, done); }
+    } else if (path === "/cs/upload" && method === "POST") {
+        // POST /cs/upload?container=NAME&blob=BLOB
+        // Body: raw bytes of the save blob (gzip-compressed)
+        // Writes to DI Connected Storage via GameSaveProvider.SubmitUpdatesAsync
+        var upContainer = query["container"] || "";
+        var upBlob      = query["blob"] || "";
+        if (!upContainer || !upBlob || !bodyBytes.length) {
+            sendJson(writer, 400, {error:"container+blob params and body required"}); done();
+        } else {
+            handleCsUpload(writer, upContainer, upBlob, bodyBytes, done);
+        }
     } else if (path === "/di/wgs" && method === "GET") {
         handleDiWgs(writer, done);
     } else if (path === "/di/wgs/download" && method === "GET") {
@@ -751,6 +762,77 @@ function handleCsDownload(writer, containerName, blobName, done) {
             sendBinary(writer, bytes, blobName);
             done();
         }, function (e) { sendJson(writer, 500, { error: e.message }); done(); });
+    });
+}
+
+// POST /cs/upload?container=NAME&blob=BLOB — write blob via GameSaveProvider.SubmitUpdatesAsync
+// This is the mirror of handleCsDownload. It opens the same provider (DI's SCID),
+// creates the container, then writes the blob bytes via submitUpdatesAsync.
+//
+// Xbox sandbox note: GameSaveProvider uses the ACTIVE sandbox on the console.
+// In XDKS.1 (Dev Mode) this writes to the dev sandbox — NOT the retail save slot.
+// Switch Xbox to RETAIL sandbox first (Settings → System → Console info → change sandbox),
+// then this will write to the correct retail Connected Storage for DI.
+//
+// Container naming: Dead Island DE uses container names like "GameSave" or "SaveGame1".
+// Use /cs/list first (after switching to RETAIL) to confirm container names.
+// Fallback default: container="GameSave", blob="save_1.sav"
+function handleCsUpload(writer, containerName, blobName, bytes, done) {
+    log("CS upload: container=" + containerName + " blob=" + blobName + " size=" + bytes.length);
+
+    openProviderForScid(DI_SCID, function (err, provider) {
+        if (err) {
+            sendJson(writer, 500, { error: "GameSaveProvider open failed: " + err, scid: DI_SCID });
+            done(); return;
+        }
+
+        log("CS upload: provider opened, sandbox active");
+
+        var container = provider.createContainer(containerName);
+
+        // Build the blob map: { blobName -> IBuffer }
+        var dw = new Windows.Storage.Streams.DataWriter();
+        dw.writeBytes(bytes);
+        var buf = dw.detachBuffer();
+
+        var updates = new Windows.Foundation.Collections.PropertySet();
+        updates.insert(blobName, buf);
+
+        container.submitUpdatesAsync(updates, null, "SaveBridge-v28").then(function (result) {
+            var ok = Windows.Gaming.XboxLive.Storage.GameSaveErrorStatus.ok;
+            if (result.status === ok) {
+                log("CS upload: SubmitUpdates OK — container=" + containerName + " blob=" + blobName);
+                sendJson(writer, 200, {
+                    ok: true,
+                    bytes: bytes.length,
+                    container: containerName,
+                    blob: blobName,
+                    scid: DI_SCID,
+                    status: result.status,
+                    note: "Written to Connected Storage. If Xbox is in RETAIL sandbox, DI will load this on next launch."
+                });
+            } else {
+                log("CS upload: SubmitUpdates status=" + result.status);
+                sendJson(writer, 500, {
+                    error: "SubmitUpdatesAsync non-OK status: " + result.status,
+                    container: containerName,
+                    blob: blobName,
+                    scid: DI_SCID,
+                    hint: "If status=3 (QuotaExceeded) the save is too large. If status=4 (BlobNotModified) the data is identical. If status=6 (ObjectExpired) re-open provider."
+                });
+            }
+            done();
+        }, function (e) {
+            var msg = e && e.message ? e.message : String(e);
+            log("CS upload: SubmitUpdates threw: " + msg);
+            sendJson(writer, 500, {
+                error: "SubmitUpdatesAsync threw: " + msg,
+                container: containerName,
+                blob: blobName,
+                scid: DI_SCID
+            });
+            done();
+        });
     });
 }
 
